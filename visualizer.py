@@ -57,7 +57,7 @@ def main():
                 mouse_pos = pygame.mouse.get_pos()
                 if button_rect.collidepoint(mouse_pos):
                     # When button is clicked, generate orders with probability p (e.g., 0.3)
-                    orders = uniform_order_distribution(0.3)
+                    orders = uniform_order_distribution(0.3, warehouse)
         
         # Fill the background
         screen.fill(GRAY)

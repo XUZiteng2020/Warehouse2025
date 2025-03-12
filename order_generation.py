@@ -6,7 +6,7 @@ import numpy as np
 # Get a random warehouse file from warehouse_data_files directory
 
 
-def uniform_order_distribution(p):
+def uniform_order_distribution(p, warehouse):
     """
     Generates a uniform order distribution for the warehouse.
     
@@ -15,6 +15,7 @@ def uniform_order_distribution(p):
     
     Parameters:
         p (float): Probability between 0 and 1 that a shelf has an order.
+        warehouse (numpy.ndarray): 2D array representing the warehouse layout
         
     Returns:
         numpy.ndarray: A 2D numpy array of the same shape as 'warehouse', containing orders.
