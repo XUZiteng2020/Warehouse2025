@@ -72,7 +72,7 @@ class WarehouseManager:
                 order_location = self.get_random_order_location()
                 if order_location:
                     # Find path to order
-                    path = find_shortest_path(self.warehouse, (robot.x, robot.y), order_location)
+                    path = find_shortest_path(self.warehouse, (robot.x, robot.y), order_location, self.workstations)
                     if path:
                         robot.path = path
                         robot.target_x, robot.target_y = order_location
@@ -95,7 +95,8 @@ class WarehouseManager:
                     
                     # Assign path to workstation
                     workstation = self.get_random_workstation()
-                    path = find_shortest_path(self.warehouse, (robot.x, robot.y), workstation)
+                    # When going to a workstation, we can pass through it since it's our destination
+                    path = find_shortest_path(self.warehouse, (robot.x, robot.y), workstation, self.workstations)
                     if path:
                         robot.path = path
                         robot.target_x, robot.target_y = workstation

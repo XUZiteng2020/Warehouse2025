@@ -123,10 +123,24 @@ class Robot:
         return True
 
 def find_shortest_path(warehouse: np.ndarray, start: Tuple[int, int], 
-                      end: Tuple[int, int]) -> List[Tuple[int, int]]:
-    """A* pathfinding algorithm for robot routing"""
+                      end: Tuple[int, int], workstations: List[Tuple[int, int]] = None) -> List[Tuple[int, int]]:
+    """A* pathfinding algorithm for robot routing
+    
+    Args:
+        warehouse: The warehouse grid
+        start: The starting position (x, y)
+        end: The target position (x, y)
+        workstations: List of workstation positions to avoid unless they are the destination
+    """
     if start == end:
         return []
+        
+    # If workstations not provided, use empty list
+    if workstations is None:
+        workstations = []
+        
+    # Create a set of workstations for faster lookup
+    workstation_set = set(workstations)
 
     rows, cols = warehouse.shape
     queue = [(0, start)]
@@ -157,19 +171,28 @@ def find_shortest_path(warehouse: np.ndarray, start: Tuple[int, int],
             
         for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
             next_x, next_y = current[0] + dx, current[1] + dy
+            next_pos = (next_x, next_y)
             
-            # Allow movement through aisles and to the final shelf position
-            if (0 <= next_x < rows and 0 <= next_y < cols and 
-                (warehouse[next_x, next_y] == 0 or (next_x, next_y) == end)):
+            # Skip if out of bounds
+            if not (0 <= next_x < rows and 0 <= next_y < cols):
+                continue
                 
-                new_cost = cost_so_far[current] + 1
-                next_pos = (next_x, next_y)
+            # Skip if it's a shelf (unless it's the destination)
+            if warehouse[next_x, next_y] == 1 and next_pos != end:
+                continue
                 
-                if next_pos not in cost_so_far or new_cost < cost_so_far[next_pos]:
-                    cost_so_far[next_pos] = new_cost
-                    priority = new_cost + heuristic(end, next_pos)
-                    heapq.heappush(queue, (priority, next_pos))
-                    came_from[next_pos] = current
+            # Skip if it's a workstation that's not our destination
+            if next_pos in workstation_set and next_pos != end:
+                continue
+            
+            # Allow movement through valid positions
+            new_cost = cost_so_far[current] + 1
+            
+            if next_pos not in cost_so_far or new_cost < cost_so_far[next_pos]:
+                cost_so_far[next_pos] = new_cost
+                priority = new_cost + heuristic(end, next_pos)
+                heapq.heappush(queue, (priority, next_pos))
+                came_from[next_pos] = current
     
     if end not in came_from:
         print(f"No path found from {start} to {end}")
