@@ -78,8 +78,8 @@ class WarehouseManager:
                         robot.target_x, robot.target_y = order_location
                         print(f"Robot at ({robot.x}, {robot.y}) assigned to order at {order_location}")
 
-            # Update robot position - pass all robots for collision detection
-            moved = robot.update_position(self.warehouse, self.robots)
+            # Update robot position
+            moved = robot.update_position(self.warehouse)
             any_movement = any_movement or moved
 
             # Check if robot reached its target
