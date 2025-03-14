@@ -49,6 +49,10 @@ def draw_robot(screen, x, y, cell_size, margin, rotation, is_working):
                          (center_x, screen_y + robot_margin // 2),
                          dot_radius)
 
+def count_shelves(warehouse):
+    """Count the number of shelf cells (value 1) in the warehouse"""
+    return np.sum(warehouse == 1)
+
 def main():
     pygame.init()
     
@@ -96,9 +100,15 @@ def main():
     # Robot count slider
     slider_rect = pygame.Rect(grid_width + 2 * margin, 4 * margin + 3 * button_height,
                             slider_width, slider_height)
-    max_robots = sum(1 for i in range(rows) for j in range(cols) 
-                    if warehouse[i, j] == 0) - len(warehouse_manager.workstations)
-    robot_count = max_robots // 2  # Start with half max robots
+    
+    # Calculate maximum robots as square root of number of shelves
+    num_shelves = count_shelves(warehouse)
+    available_aisles = sum(1 for i in range(rows) for j in range(cols) 
+                          if warehouse[i, j] == 0) - len(warehouse_manager.workstations)
+    max_robots = min(int(np.sqrt(num_shelves)), available_aisles)
+    print(f"Setting maximum robots to {max_robots} (sqrt of {num_shelves} shelves)")
+    
+    robot_count = max(1, max_robots // 2)  # Start with half max robots
     warehouse_manager.initialize_robots(robot_count)
     print(f"Initialized {robot_count} robots")
     
