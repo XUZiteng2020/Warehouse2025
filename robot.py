@@ -20,7 +20,37 @@ class Robot:
         self.waiting_time = 0  # Time to wait at current location
         self.is_at_workstation = False
 
-    def update_position(self, warehouse: np.ndarray) -> bool:
+    def get_position_in_front(self) -> Tuple[int, int]:
+        """Get the coordinates of the position directly in front of the robot based on its rotation"""
+        dx, dy = 0, 0
+        if self.rotation == 0:    # Right
+            dx, dy = 0, 1
+        elif self.rotation == 90:  # Down
+            dx, dy = 1, 0
+        elif self.rotation == 180:  # Left
+            dx, dy = 0, -1
+        elif self.rotation == 270:  # Up
+            dx, dy = -1, 0
+        
+        return (self.x + dx, self.y + dy)
+    
+    def is_robot_in_front(self, all_robots: List['Robot']) -> bool:
+        """Check if there's another robot directly in front of this robot"""
+        front_pos = self.get_position_in_front()
+        
+        for other_robot in all_robots:
+            # Skip self
+            if other_robot is self:
+                continue
+                
+            # Check if any other robot is at the position in front
+            if (other_robot.x, other_robot.y) == front_pos:
+                print(f"Robot at ({self.x}, {self.y}) detected robot in front at {front_pos}")
+                return True
+                
+        return False
+
+    def update_position(self, warehouse: np.ndarray, all_robots: List['Robot'] = None) -> bool:
         """Update robot position based on current path and turning requirements"""
         if self.waiting_time > 0:
             print(f"Robot at ({self.x}, {self.y}) waiting: {self.waiting_time} steps left")
@@ -80,7 +110,13 @@ class Robot:
             self.rotation = target_rotation
             return False
 
-        # Move to next position if no turning needed
+        # Check for robot directly in front after setting rotation
+        if all_robots and self.is_robot_in_front(all_robots):
+            print(f"Robot at ({self.x}, {self.y}) waiting for 1 time unit due to robot in front")
+            self.waiting_time = 1
+            return False
+
+        # Move to next position if no turning needed and no robot in front
         old_x, old_y = self.x, self.y
         self.x, self.y = self.path.pop(0)
         print(f"Robot moved from ({old_x}, {old_y}) to ({self.x}, {self.y})")
