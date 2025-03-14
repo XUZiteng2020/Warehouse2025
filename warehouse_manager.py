@@ -79,7 +79,7 @@ class WarehouseManager:
                         print(f"Robot at ({robot.x}, {robot.y}) assigned to order at {order_location}")
 
             # Update robot position
-            moved = robot.update_position(self.warehouse)
+            moved = robot.update_position(self.warehouse, self.robots)
             any_movement = any_movement or moved
 
             # Check if robot reached its target

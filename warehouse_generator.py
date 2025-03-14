@@ -26,14 +26,18 @@ def generate_warehouse(rows, cols):
     
     return warehouse
 
-# Generate a larger warehouse (e.g., 12 rows by 20 columns)
-rows, cols = 12, 20
+# Generate a more manageable warehouse (28 rows + 2 for aisles = 30 rows, 100 columns)
+
+# rows, cols = 12, 20
+rows, cols = 28, 100  # 28 rows + 2 rows for top aisles = 30 rows total
 warehouse_data = generate_warehouse(rows, cols)
 
 # Add two rows of aisles on top by prepending rows of zeros
 warehouse_data_with_aisles = np.vstack((np.zeros((2, cols), dtype=int), warehouse_data))
-# Directory containing the warehouse data files
-data_files_dir = '/Users/xuziteng/Documents/GitHub/Warehouse2025/warehouse_data_files/'
+
+# Create directory if it doesn't exist
+data_files_dir = 'warehouse_data_files'
+os.makedirs(data_files_dir, exist_ok=True)
 
 # Delete all files in the warehouse_data_files directory
 files = glob.glob(os.path.join(data_files_dir, '*'))
@@ -42,3 +46,7 @@ for f in files:
 
 # Save the final warehouse data to a file
 np.savetxt(os.path.join(data_files_dir, 'warehouse_data.txt'), warehouse_data_with_aisles, fmt='%d')
+
+print(f"Generated warehouse with shape: {warehouse_data_with_aisles.shape}")
+print(f"Number of shelf cells (1's): {np.sum(warehouse_data_with_aisles == 1)}")
+print(f"Number of aisle cells (0's): {np.sum(warehouse_data_with_aisles == 0)}")

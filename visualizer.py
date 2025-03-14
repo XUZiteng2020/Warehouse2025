@@ -52,6 +52,11 @@ def draw_robot(screen, x, y, cell_size, margin, rotation, is_working):
 def main():
     pygame.init()
     
+    # Get screen info
+    screen_info = pygame.display.Info()
+    max_screen_width = screen_info.current_w - 20
+    max_screen_height = screen_info.current_h - 20
+    
     # Define colors (RGB)
     BLACK = (0, 0, 0)       # Aisles background
     WHITE = (255, 255, 255) # Shelves background and button background
@@ -64,43 +69,58 @@ def main():
     print(f"Warehouse shape: {warehouse.shape}")
     print(f"Workstations: {warehouse_manager.workstations}")
     
-    # Set cell size for drawing the warehouse grid
-    cell_size = 40
+    # Define UI elements dimensions
+    button_width = 250
+    button_height = 60
+    margin = 15
+    slider_width = 250
+    slider_height = 25
+    ui_width = button_width + 3 * margin
+    
+    # Calculate cell size to fit screen
     rows, cols = warehouse.shape
+    cell_size_by_width = (max_screen_width - ui_width - 2 * margin) // cols
+    cell_size_by_height = (max_screen_height - 2 * margin) // rows
+    base_cell_size = min(cell_size_by_width, cell_size_by_height)
+    cell_size = base_cell_size * 2  # Double the cell size
+    
+    # Calculate actual dimensions
     grid_width = cols * cell_size
     grid_height = rows * cell_size
     
-    # Define UI elements dimensions
-    button_width = 200
-    button_height = 50
-    margin = 20
-    slider_width = 200
-    slider_height = 20
+    # Window dimensions - use actual grid size plus UI width
+    window_width = min(grid_width + ui_width + 3 * margin, screen_info.current_w)
+    window_height = min(grid_height + 2 * margin, screen_info.current_h)
     
-    # Window dimensions
-    window_width = grid_width + button_width + 3 * margin
-    window_height = max(grid_height + 2 * margin, 5 * (button_height + margin))
-    
-    # Set up the Pygame window
-    screen = pygame.display.set_mode((window_width, window_height))
+    # Set up the Pygame window with fullscreen mode
+    screen = pygame.display.set_mode((window_width, window_height), pygame.RESIZABLE)
     pygame.display.set_caption("Warehouse Simulation")
     
-    # Define UI element rectangles
-    order_button_rect = pygame.Rect(grid_width + 2 * margin, margin,
+    # Scrolling state
+    scroll_x = 0
+    scroll_y = 0
+    scrolling = False
+    last_mouse_pos = None
+    
+    # Define UI element rectangles - adjust to use actual grid width
+    order_button_rect = pygame.Rect(window_width - ui_width + margin, margin,
                                   button_width, button_height)
-    play_button_rect = pygame.Rect(grid_width + 2 * margin, 2 * margin + button_height,
+    play_button_rect = pygame.Rect(window_width - ui_width + margin, 2 * margin + button_height,
                                  button_width, button_height)
-    evaluate_button_rect = pygame.Rect(grid_width + 2 * margin, 3 * margin + 2 * button_height,
+    evaluate_button_rect = pygame.Rect(window_width - ui_width + margin, 3 * margin + 2 * button_height,
                                      button_width, button_height)
     
     # Robot count slider
-    slider_rect = pygame.Rect(grid_width + 2 * margin, 4 * margin + 3 * button_height,
+    slider_rect = pygame.Rect(window_width - ui_width + margin, 4 * margin + 3 * button_height,
                             slider_width, slider_height)
-    max_robots = sum(1 for i in range(rows) for j in range(cols) 
-                    if warehouse[i, j] == 0) - len(warehouse_manager.workstations)
+    # Calculate max robots as square root of warehouse size
+    warehouse_size = rows * cols
+    max_robots = min(int(np.sqrt(warehouse_size)), 
+                    sum(1 for i in range(rows) for j in range(cols) 
+                        if warehouse[i, j] == 0) - len(warehouse_manager.workstations))
     robot_count = max_robots // 2  # Start with half max robots
     warehouse_manager.initialize_robots(robot_count)
-    print(f"Initialized {robot_count} robots")
+    print(f"Initialized {robot_count} robots out of maximum {max_robots}")
     
     # Load font
     font = pygame.font.SysFont(None, 30)
@@ -120,35 +140,57 @@ def main():
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 mouse_pos = pygame.mouse.get_pos()
                 
-                # Order generation button
-                if order_button_rect.collidepoint(mouse_pos):
-                    orders = uniform_order_distribution(0.3, warehouse)
-                    warehouse_manager.update_orders(orders)
-                    print("Generated new orders")
-                
-                # Play/Pause button
-                elif play_button_rect.collidepoint(mouse_pos):
-                    warehouse_manager.toggle_play()
-                
-                # Evaluate button
-                elif evaluate_button_rect.collidepoint(mouse_pos):
-                    pass  # Handled in display
-                
-                # Slider
-                elif slider_rect.collidepoint(mouse_pos):
-                    dragging_slider = True
+                if mouse_pos[0] < window_width - ui_width:  # Click in warehouse area
+                    if event.button == 1:  # Left click
+                        scrolling = True
+                        last_mouse_pos = mouse_pos
+                else:  # Click in UI area
+                    # Order generation button
+                    if order_button_rect.collidepoint(mouse_pos):
+                        orders = uniform_order_distribution(0.3, warehouse)
+                        warehouse_manager.update_orders(orders)
+                        print("Generated new orders")
+                    
+                    # Play/Pause button
+                    elif play_button_rect.collidepoint(mouse_pos):
+                        warehouse_manager.toggle_play()
+                    
+                    # Evaluate button
+                    elif evaluate_button_rect.collidepoint(mouse_pos):
+                        pass  # Handled in display
+                    
+                    # Slider
+                    elif slider_rect.collidepoint(mouse_pos):
+                        dragging_slider = True
             
             elif event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 1:  # Left click release
+                    scrolling = False
+                    last_mouse_pos = None
                 dragging_slider = False
             
-            elif event.type == pygame.MOUSEMOTION and dragging_slider:
-                mouse_x = pygame.mouse.get_pos()[0]
-                relative_x = min(max(mouse_x - slider_rect.x, 0), slider_width)
-                new_robot_count = int((relative_x / slider_width) * max_robots)
-                if new_robot_count != robot_count:
-                    robot_count = max(1, new_robot_count)
-                    warehouse_manager.initialize_robots(robot_count)
-                    print(f"Updated robot count to {robot_count}")
+            elif event.type == pygame.MOUSEMOTION:
+                mouse_pos = pygame.mouse.get_pos()
+                
+                if scrolling and last_mouse_pos:
+                    # Calculate the difference in mouse position
+                    dx = mouse_pos[0] - last_mouse_pos[0]
+                    dy = mouse_pos[1] - last_mouse_pos[1]
+                    
+                    # Update scroll position
+                    scroll_x = max(0, min(grid_width - (window_width - ui_width), scroll_x - dx))
+                    scroll_y = max(0, min(grid_height - window_height, scroll_y - dy))
+                    
+                    last_mouse_pos = mouse_pos
+                
+                elif dragging_slider:
+                    mouse_x = pygame.mouse.get_pos()[0]
+                    relative_x = min(max(mouse_x - slider_rect.x, 0), slider_width)
+                    new_robot_count = int((relative_x / slider_width) * max_robots)
+                    if new_robot_count != robot_count:
+                        robot_count = max(1, new_robot_count)
+                        warehouse_manager.initialize_robots(robot_count)
+                        print(f"Updated robot count to {robot_count}")
         
         # Update warehouse state
         if warehouse_manager.update() and frame_count % 60 == 0:
@@ -160,10 +202,15 @@ def main():
         screen.fill(GRAY)
         
         # Draw warehouse grid
-        for i in range(rows):
-            for j in range(cols):
-                cell_rect = pygame.Rect(j * cell_size + margin,
-                                      i * cell_size + margin,
+        visible_start_col = max(0, scroll_x // cell_size)
+        visible_end_col = min(cols, (scroll_x + window_width - ui_width) // cell_size + 2)
+        visible_start_row = max(0, scroll_y // cell_size)
+        visible_end_row = min(rows, (scroll_y + window_height) // cell_size + 2)
+        
+        for i in range(visible_start_row, visible_end_row):
+            for j in range(visible_start_col, visible_end_col):
+                cell_rect = pygame.Rect(j * cell_size + margin - scroll_x,
+                                      i * cell_size + margin - scroll_y,
                                       cell_size, cell_size)
                 
                 # Base color (aisle or shelf)
@@ -185,10 +232,14 @@ def main():
                 # Draw cell border
                 pygame.draw.rect(screen, GRAY, cell_rect, 1)
         
-        # Draw robots
+        # Draw robots (only if visible)
         for robot in warehouse_manager.robots:
-            draw_robot(screen, robot.x, robot.y, cell_size, margin,
-                      robot.rotation, robot.status == RobotStatus.WORKING)
+            screen_x = robot.y * cell_size + margin - scroll_x
+            screen_y = robot.x * cell_size + margin - scroll_y
+            if (0 <= screen_x <= window_width - ui_width and 
+                0 <= screen_y <= window_height):
+                draw_robot(screen, robot.x, robot.y, cell_size, margin - scroll_x,
+                          robot.rotation, robot.status == RobotStatus.WORKING)
         
         # Draw UI elements
         pygame.draw.rect(screen, WHITE, order_button_rect)
@@ -218,7 +269,7 @@ def main():
         screen.blit(play_text, play_text.get_rect(center=play_button_rect.center))
         screen.blit(evaluate_text, evaluate_text.get_rect(center=evaluate_button_rect.center))
         screen.blit(robot_text, (slider_rect.x, slider_rect.y - 25))
-        screen.blit(time_text, (margin, margin))
+        screen.blit(time_text, (margin - scroll_x, margin - scroll_y))
         
         pygame.display.flip()
         clock.tick(60)  # 60 FPS
