@@ -1,7 +1,7 @@
 import numpy as np
 from enum import Enum
 import heapq
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Set, Dict
 
 class RobotStatus(Enum):
     IDLE = "idle"
@@ -122,9 +122,91 @@ class Robot:
         print(f"Robot moved from ({old_x}, {old_y}) to ({self.x}, {self.y})")
         return True
 
+def is_directional_aisle(warehouse: np.ndarray, pos: Tuple[int, int]) -> Optional[Tuple[bool, int]]:
+    """
+    Determine if a position is in a directional aisle and which side it's on.
+    
+    Args:
+        warehouse: The warehouse grid
+        pos: Position to check (x, y)
+        
+    Returns:
+        (is_right_side, direction) where:
+        - is_right_side: True if position is on right side of aisle, False if on left side
+        - direction: Direction of aisle travel (0: right, 1: down, 2: left, 3: up)
+        Returns None if not in a 2-width aisle
+    """
+    x, y = pos
+    rows, cols = warehouse.shape
+    
+    # Skip if position is not an aisle
+    if warehouse[x, y] != 0:
+        return None
+    
+    # Check for horizontal aisle (look north and south)
+    north_wall = x == 0 or warehouse[x-1, y] == 1
+    south_wall = x == rows-1 or warehouse[x+1, y] == 1
+    
+    if north_wall and south_wall:
+        # Check if part of 2-width aisle by checking adjacent position
+        if y > 0 and y < cols-1:
+            # Check left and right
+            left_is_aisle = warehouse[x, y-1] == 0
+            right_is_aisle = warehouse[x, y+1] == 0
+            
+            # If aisle continues both left and right, check if there's another parallel aisle
+            if left_is_aisle and right_is_aisle:
+                # Check if there's a parallel aisle to the north or south
+                parallel_aisle_north = x > 1 and warehouse[x-2, y] == 0
+                parallel_aisle_south = x < rows-2 and warehouse[x+2, y] == 0
+                
+                if parallel_aisle_north:
+                    # This is a horizontal 2-width aisle
+                    # If we're in bottom row, we're on right side for eastbound
+                    is_right_side = x > x-2  # We're in the southern aisle
+                    return (is_right_side, 0)  # Eastbound
+                    
+                if parallel_aisle_south:
+                    # This is a horizontal 2-width aisle
+                    # If we're in top row, we're on right side for westbound
+                    is_right_side = x < x+2  # We're in the northern aisle
+                    return (is_right_side, 2)  # Westbound
+    
+    # Check for vertical aisle (look east and west)
+    east_wall = y == cols-1 or warehouse[x, y+1] == 1
+    west_wall = y == 0 or warehouse[x, y-1] == 1
+    
+    if east_wall and west_wall:
+        # Check if part of 2-width aisle by checking adjacent position
+        if x > 0 and x < rows-1:
+            # Check up and down
+            up_is_aisle = warehouse[x-1, y] == 0
+            down_is_aisle = warehouse[x+1, y] == 0
+            
+            # If aisle continues both up and down, check if there's another parallel aisle
+            if up_is_aisle and down_is_aisle:
+                # Check if there's a parallel aisle to the east or west
+                parallel_aisle_east = y < cols-2 and warehouse[x, y+2] == 0
+                parallel_aisle_west = y > 1 and warehouse[x, y-2] == 0
+                
+                if parallel_aisle_east:
+                    # This is a vertical 2-width aisle
+                    # If we're in left column, we're on right side for southbound
+                    is_right_side = y < y+2  # We're in the western aisle
+                    return (is_right_side, 1)  # Southbound
+                    
+                if parallel_aisle_west:
+                    # This is a vertical 2-width aisle
+                    # If we're in right column, we're on right side for northbound
+                    is_right_side = y > y-2  # We're in the eastern aisle
+                    return (is_right_side, 3)  # Northbound
+    
+    # Not in a 2-width aisle or not able to determine direction
+    return None
+
 def find_shortest_path(warehouse: np.ndarray, start: Tuple[int, int], 
                       end: Tuple[int, int], workstations: List[Tuple[int, int]] = None) -> List[Tuple[int, int]]:
-    """A* pathfinding algorithm for robot routing
+    """A* pathfinding algorithm for robot routing with directional aisle constraints
     
     Args:
         warehouse: The warehouse grid
@@ -184,6 +266,38 @@ def find_shortest_path(warehouse: np.ndarray, start: Tuple[int, int],
             # Skip if it's a workstation that's not our destination
             if next_pos in workstation_set and next_pos != end:
                 continue
+            
+            # Check directional aisle constraints
+            # Skip if we're trying to move on the wrong side of a directional aisle
+            current_aisle_info = is_directional_aisle(warehouse, current)
+            next_aisle_info = is_directional_aisle(warehouse, next_pos)
+            
+            # If moving within the same directional aisle
+            if current_aisle_info and next_aisle_info:
+                current_is_right, current_direction = current_aisle_info
+                next_is_right, next_direction = next_aisle_info
+                
+                # If on the same aisle with same direction
+                if current_direction == next_direction:
+                    # If we're on the left side (wrong side)
+                    if not current_is_right:
+                        # Only allow moving in opposite direction of the aisle
+                        allowed_direction = (current_direction + 2) % 4
+                        movement_direction = -1
+                        
+                        # Determine our movement direction
+                        if dx == 1:  # Moving down
+                            movement_direction = 1
+                        elif dx == -1:  # Moving up
+                            movement_direction = 3
+                        elif dy == 1:  # Moving right
+                            movement_direction = 0
+                        elif dy == -1:  # Moving left
+                            movement_direction = 2
+                            
+                        # If we're trying to move with the aisle flow on the wrong side, skip
+                        if movement_direction != allowed_direction:
+                            continue
             
             # Allow movement through valid positions
             new_cost = cost_so_far[current] + 1
