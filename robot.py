@@ -19,6 +19,7 @@ class Robot:
         self.turning_steps = 0  # Steps remaining in current turn
         self.waiting_time = 0  # Time to wait at current location
         self.is_at_workstation = False
+        self.collision_wait_counter = 0  # Counter for waiting when collision detected
 
     def get_position_in_front(self) -> Tuple[int, int]:
         """Get the coordinates of the position directly in front of the robot based on its rotation"""
@@ -112,11 +113,16 @@ class Robot:
 
         # Check for robot directly in front after setting rotation
         if all_robots and self.is_robot_in_front(all_robots):
-            print(f"Robot at ({self.x}, {self.y}) waiting for 1 time unit due to robot in front")
-            self.waiting_time = 1
-            return False
+            if self.collision_wait_counter < 10:
+                print(f"Robot at ({self.x}, {self.y}) waiting for collision: {self.collision_wait_counter}/10 time units")
+                self.collision_wait_counter += 1
+                self.waiting_time = 1
+                return False
+            else:
+                print(f"Robot at ({self.x}, {self.y}) waited 10 time units, proceeding through collision")
+                self.collision_wait_counter = 0  # Reset counter for next collision
 
-        # Move to next position if no turning needed and no robot in front
+        # Move to next position if no turning needed
         old_x, old_y = self.x, self.y
         self.x, self.y = self.path.pop(0)
         print(f"Robot moved from ({old_x}, {old_y}) to ({self.x}, {self.y})")
