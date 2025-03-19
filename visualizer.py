@@ -4,7 +4,13 @@ import os
 import random
 from order_generation import uniform_order_distribution
 from warehouse_manager import WarehouseManager
-from robot import RobotStatus
+from robot import (
+    RobotStatus, 
+    build_reservation_table,
+    update_reservation_table,
+    time_expanded_a_star,
+    is_cell_safe
+)
 import math
 
 
@@ -54,10 +60,11 @@ def count_shelves(warehouse):
     return np.sum(warehouse == 1)
 
 class WarehouseVisualizer:
-    def __init__(self, warehouse):
+    def __init__(self, warehouse, collision_method=1):
         pygame.init()
         self.warehouse = warehouse
         self.rows, self.cols = warehouse.shape
+        self.collision_method = collision_method  # Store current collision method
         
         # Screen settings
         self.screen_width = 1600  # Fixed window size
@@ -78,7 +85,7 @@ class WarehouseVisualizer:
         
         # Zoom and pan settings
         self.zoom_level = 1.0
-        self.min_zoom = self.base_cell_size / 40  # Allow zooming out to see the whole warehouse
+        self.min_zoom = self.base_cell_size / 40
         self.max_zoom = 2.0
         self.pan_x = 0
         self.pan_y = 0
@@ -89,8 +96,8 @@ class WarehouseVisualizer:
         self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
         pygame.display.set_caption("Warehouse Simulation")
         
-        # Initialize warehouse manager
-        self.warehouse_manager = WarehouseManager(warehouse)
+        # Initialize warehouse manager with specified collision method
+        self.warehouse_manager = WarehouseManager(warehouse, collision_method=collision_method)
         self.robot_count = max(1, int(np.sqrt(np.sum(warehouse == 1))))
         self.warehouse_manager.initialize_robots(self.robot_count)
         
@@ -100,6 +107,7 @@ class WarehouseVisualizer:
         self.RED = (255, 0, 0)
         self.GREEN = (0, 255, 0)
         self.GRAY = (200, 200, 200)
+        self.BLUE = (0, 0, 255)
         
         # Font
         self.font = pygame.font.SysFont(None, 30)
@@ -109,6 +117,15 @@ class WarehouseVisualizer:
     
     def init_ui_elements(self):
         """Initialize UI element rectangles"""
+        # Add collision method toggle button
+        self.collision_button_rect = pygame.Rect(
+            self.screen_width - self.button_width - self.margin,
+            5 * self.margin + 4 * self.button_height,
+            self.button_width,
+            self.button_height
+        )
+        
+        # Existing UI elements
         self.order_button_rect = pygame.Rect(
             self.screen_width - self.button_width - self.margin, self.margin,
             self.button_width, self.button_height
@@ -222,7 +239,7 @@ class WarehouseVisualizer:
         """Draw UI elements"""
         # Draw buttons
         for button_rect in [self.order_button_rect, self.play_button_rect, 
-                          self.evaluate_button_rect]:
+                          self.evaluate_button_rect, self.collision_button_rect]:
             pygame.draw.rect(self.screen, self.WHITE, button_rect)
             pygame.draw.rect(self.screen, self.BLACK, button_rect, 2)
         
@@ -248,6 +265,10 @@ class WarehouseVisualizer:
             f"Time: {self.warehouse_manager.time_step}s", True, self.BLACK
         )
         zoom_text = self.font.render(f"Zoom: {self.zoom_level:.1f}x", True, self.BLACK)
+        collision_text = self.font.render(
+            "Collision: Wait" if self.collision_method == 1 else "Collision: Reserve",
+            True, self.BLACK
+        )
         
         # Position texts
         self.screen.blit(order_text, order_text.get_rect(
@@ -259,6 +280,15 @@ class WarehouseVisualizer:
         self.screen.blit(robot_text, (self.slider_rect.x, self.slider_rect.y - 25))
         self.screen.blit(time_text, (self.margin, self.margin))
         self.screen.blit(zoom_text, (self.margin, self.margin + 30))
+        self.screen.blit(collision_text, collision_text.get_rect(
+            center=self.collision_button_rect.center))
+    
+    def toggle_collision_method(self):
+        """Toggle between collision methods and reinitialize robots"""
+        self.collision_method = 2 if self.collision_method == 1 else 1
+        self.warehouse_manager = WarehouseManager(self.warehouse, collision_method=self.collision_method)
+        self.warehouse_manager.initialize_robots(self.robot_count)
+        print(f"Switched to collision method {self.collision_method}")
     
     def handle_input(self, event):
         """Handle input events"""
@@ -287,6 +317,8 @@ class WarehouseVisualizer:
                     self.warehouse_manager.update_orders(orders)
                 elif self.play_button_rect.collidepoint(mouse_pos):
                     self.warehouse_manager.toggle_play()
+                elif self.collision_button_rect.collidepoint(mouse_pos):
+                    self.toggle_collision_method()
                 elif self.slider_rect.collidepoint(mouse_pos):
                     self.dragging = True
                 else:
@@ -357,8 +389,10 @@ def main():
     random_warehouse_file = os.path.join(warehouse_dir, random.choice(warehouse_files))
     warehouse = np.loadtxt(random_warehouse_file)
     
-    # Create and run visualizer
-    visualizer = WarehouseVisualizer(warehouse)
+    # Create and run visualizer with specified collision method
+    # Use collision_method=1 for 10-second waiting rule
+    # Use collision_method=2 for reservation-based system
+    visualizer = WarehouseVisualizer(warehouse, collision_method=1)  # Change this value to switch methods
     visualizer.run()
 
 if __name__ == "__main__":

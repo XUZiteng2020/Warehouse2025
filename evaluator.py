@@ -11,6 +11,8 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
 import pandas as pd
+import multiprocessing as mp
+from functools import partial
 
 # Import warehouse simulation components
 from warehouse_manager import WarehouseManager
@@ -730,109 +732,120 @@ def compare_directional_aisles(
     plt.savefig('directional_vs_nondirectional_jobs.png', dpi=300, bbox_inches='tight')
     plt.show()
 
+def run_parallel_simulations(params: Tuple) -> Tuple[int, int, Dict]:
+    """
+    Run a single simulation with given parameters. Designed for parallel processing.
+    
+    Args:
+        params: Tuple containing (warehouse, robot_count, order_probability, max_steps)
+        
+    Returns:
+        Tuple of (time_steps, completed_jobs, metrics)
+    """
+    warehouse, robot_count, order_probability, max_steps = params
+    steps, jobs = run_simulation_until_complete(
+        warehouse, 
+        robot_count,
+        order_probability,
+        max_steps
+    )
+    
+    metrics = {
+        'robot_count': robot_count,
+        'order_probability': order_probability,
+        'steps': steps,
+        'completed_jobs': jobs,
+        'is_timeout': steps >= max_steps
+    }
+    
+    return steps, jobs, metrics
+
 def generate_training_data(
     num_samples: int = 100,
     warehouse_sizes: List[Tuple[int, int]] = [(10, 10), (15, 15), (20, 20)],
     robot_ratios: List[float] = [0.2, 0.4, 0.6, 0.8],
     workstation_ratios: List[float] = [0.1, 0.2, 0.3],
     order_densities: List[float] = [0.2, 0.4, 0.6],
-    max_steps: int = 5000
+    max_steps: int = 5000,
+    n_processes: Optional[int] = None
 ) -> pd.DataFrame:
-    """
-    Generate training data by running simulations with different parameters.
+    """Generate training data using parallel processing
     
     Args:
-        num_samples: Number of simulations to run for each configuration
-        warehouse_sizes: List of (rows, cols) tuples for different warehouse sizes
-        robot_ratios: List of ratios of robots to warehouse size
-        workstation_ratios: List of ratios of workstations to warehouse size
-        order_densities: List of order probability densities
-        max_steps: Maximum simulation steps before timeout
-        
-    Returns:
-        DataFrame containing simulation results and parameters
+        num_samples: Number of samples per configuration
+        warehouse_sizes: List of warehouse dimensions to test
+        robot_ratios: List of robot count ratios (relative to warehouse size)
+        workstation_ratios: List of workstation count ratios
+        order_densities: List of order density probabilities
+        max_steps: Maximum simulation steps
+        n_processes: Number of processes to use (defaults to CPU count - 1)
     """
-    data = []
+    if n_processes is None:
+        n_processes = max(1, mp.cpu_count() - 1)
     
-    for size in warehouse_sizes:
-        rows, cols = size
-        warehouse_size = rows * cols
-        
-        # Generate a basic warehouse layout
-        warehouse = np.zeros((rows, cols))
-        
-        # Add shelves (1's) in a grid pattern
-        for i in range(1, rows-1, 2):
-            for j in range(1, cols-1, 2):
-                warehouse[i, j] = 1
-                
-        num_shelves = np.sum(warehouse == 1)
-        available_aisles = np.sum(warehouse == 0)
-        
-        for robot_ratio in robot_ratios:
-            num_robots = max(1, int(robot_ratio * np.sqrt(num_shelves)))
+    print(f"Generating training data using {n_processes} processes...")
+    
+    all_results = []
+    
+    # Create a pool of worker processes
+    with mp.Pool(processes=n_processes) as pool:
+        # For each warehouse size
+        for size in warehouse_sizes:
+            rows, cols = size
+            print(f"\nProcessing warehouse size {size}")
             
-            for ws_ratio in workstation_ratios:
-                num_workstations = max(1, int(ws_ratio * available_aisles))
-                workstations = []
-                
-                # Place workstations randomly in available aisle positions
-                aisle_positions = [(i, j) for i in range(rows) for j in range(cols) 
-                                 if warehouse[i, j] == 0]
-                if len(aisle_positions) >= num_workstations:
-                    workstation_positions = random.sample(aisle_positions, num_workstations)
-                    workstations = workstation_positions
-                
+            # Generate warehouse layout
+            warehouse = generate_warehouse_layout(rows, cols)
+            available_space = np.sum(warehouse == 0)
+            
+            # Calculate robot and workstation counts
+            robot_counts = [max(1, int(available_space * ratio)) for ratio in robot_ratios]
+            workstation_counts = [max(1, int(available_space * ratio)) for ratio in workstation_ratios]
+            
+            # Generate all parameter combinations
+            param_combinations = []
+            for robot_count in robot_counts:
                 for order_density in order_densities:
-                    print(f"\nRunning simulations for:")
-                    print(f"Warehouse size: {size}")
-                    print(f"Robots: {num_robots}")
-                    print(f"Workstations: {num_workstations}")
-                    print(f"Order density: {order_density}")
-                    
-                    for _ in tqdm.tqdm(range(num_samples)):
-                        # Generate orders
-                        orders = uniform_order_distribution(order_density, warehouse)
-                        total_orders = np.sum(orders)
-                        
-                        # Run simulation
-                        warehouse_manager = WarehouseManager(warehouse)
-                        warehouse_manager.initialize_robots(num_robots)
-                        warehouse_manager.update_orders(orders)
-                        warehouse_manager.workstations = workstations
-                        
-                        warehouse_manager.is_playing = True
-                        steps = 0
-                        while steps < max_steps:
-                            steps += 1
-                            movement = warehouse_manager.update()
-                            
-                            if warehouse_manager.completed_jobs >= total_orders:
-                                break
-                                
-                            if not movement and np.sum(warehouse_manager.orders) == 0:
-                                break
-                        
-                        # Record results
-                        data.append({
-                            'warehouse_rows': rows,
-                            'warehouse_cols': cols,
-                            'warehouse_size': warehouse_size,
-                            'num_shelves': num_shelves,
-                            'num_robots': num_robots,
-                            'num_workstations': num_workstations,
-                            'order_density': order_density,
-                            'total_orders': total_orders,
-                            'completion_time': steps,
-                            'completed_jobs': warehouse_manager.completed_jobs,
-                            'timeout': steps >= max_steps
-                        })
+                    # Create num_samples copies of this configuration
+                    for _ in range(num_samples):
+                        param_combinations.append((
+                            warehouse.copy(),
+                            robot_count,
+                            order_density,
+                            max_steps
+                        ))
+            
+            # Run simulations in parallel
+            print(f"Running {len(param_combinations)} simulations...")
+            results = list(tqdm.tqdm(
+                pool.imap(run_parallel_simulations, param_combinations),
+                total=len(param_combinations)
+            ))
+            
+            # Process results
+            for _, _, metrics in results:
+                metrics['warehouse_size'] = rows * cols
+                metrics['warehouse_rows'] = rows
+                metrics['warehouse_cols'] = cols
+                all_results.append(metrics)
     
-    return pd.DataFrame(data)
+    # Convert results to DataFrame
+    df = pd.DataFrame(all_results)
+    
+    # Calculate additional features
+    df['robot_density'] = df['robot_count'] / df['warehouse_size']
+    df['completion_rate'] = df['completed_jobs'] / (df['warehouse_size'] * df['order_probability'])
+    df['steps_per_job'] = df['steps'] / df['completed_jobs']
+    
+    print("\nTraining data generation complete!")
+    print(f"Generated {len(df)} samples")
+    print("\nSample statistics:")
+    print(df.describe())
+    
+    return df
 
 def train_completion_time_model(data: pd.DataFrame) -> Tuple[RandomForestRegressor, Dict]:
-    """
-    Train a Random Forest model to predict completion time.
+    """Train a RandomForest model to predict completion time
     
     Args:
         data: DataFrame containing simulation results
@@ -842,183 +855,186 @@ def train_completion_time_model(data: pd.DataFrame) -> Tuple[RandomForestRegress
     """
     # Prepare features
     features = [
-        'warehouse_size', 'num_shelves', 'num_robots', 
-        'num_workstations', 'order_density', 'total_orders'
+        'warehouse_size', 'warehouse_rows', 'warehouse_cols',
+        'robot_count', 'robot_density', 'order_probability'
     ]
     
     X = data[features]
-    y = data['completion_time']
+    y = data['steps']
     
     # Split data
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
     # Train model
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    print("\nTraining RandomForest model...")
+    model = RandomForestRegressor(
+        n_estimators=100,
+        max_depth=None,
+        min_samples_split=2,
+        min_samples_leaf=1,
+        n_jobs=-1,  # Use all available cores
+        random_state=42
+    )
+    
     model.fit(X_train, y_train)
     
     # Evaluate model
-    train_pred = model.predict(X_train)
-    test_pred = model.predict(X_test)
+    train_score = model.score(X_train, y_train)
+    test_score = model.score(X_test, y_test)
     
-    train_mse = mean_squared_error(y_train, train_pred)
-    test_mse = mean_squared_error(y_test, test_pred)
-    train_r2 = r2_score(y_train, train_pred)
-    test_r2 = r2_score(y_test, test_pred)
-    
-    # Get feature importance
-    feature_importance = dict(zip(features, model.feature_importances_))
+    y_pred = model.predict(X_test)
+    mse = mean_squared_error(y_test, y_pred)
+    rmse = np.sqrt(mse)
     
     print("\nModel Performance:")
-    print(f"Train MSE: {train_mse:.2f}")
-    print(f"Test MSE: {test_mse:.2f}")
-    print(f"Train R²: {train_r2:.3f}")
-    print(f"Test R²: {test_r2:.3f}")
+    print(f"Train R² score: {train_score:.4f}")
+    print(f"Test R² score: {test_score:.4f}")
+    print(f"Root Mean Squared Error: {rmse:.2f} steps")
     
-    print("\nFeature Importance:")
-    for feature, importance in sorted(
-        feature_importance.items(), key=lambda x: x[1], reverse=True
-    ):
-        print(f"{feature}: {importance:.3f}")
+    # Get feature importance
+    importance = dict(zip(features, model.feature_importances_))
     
-    return model, feature_importance
+    # Plot feature importance
+    plt.figure(figsize=(10, 6))
+    importance_df = pd.DataFrame(
+        list(importance.items()),
+        columns=['Feature', 'Importance']
+    ).sort_values('Importance', ascending=True)
+    
+    plt.barh(importance_df['Feature'], importance_df['Importance'])
+    plt.title('Feature Importance in Completion Time Prediction')
+    plt.xlabel('Importance')
+    plt.tight_layout()
+    plt.savefig('feature_importance.png', dpi=300, bbox_inches='tight')
+    
+    return model, importance
 
 def validate_model_predictions(
     model: RandomForestRegressor,
     num_validation_samples: int = 20,
     warehouse_sizes: List[Tuple[int, int]] = [(25, 25), (30, 30)],  # Different from training
-    max_steps: int = 5000
+    max_steps: int = 5000,
+    n_processes: Optional[int] = None
 ) -> None:
-    """
-    Validate model predictions on new warehouse configurations.
+    """Validate model predictions on new warehouse configurations
     
     Args:
-        model: Trained RandomForestRegressor model
-        num_validation_samples: Number of validation simulations to run
-        warehouse_sizes: List of (rows, cols) tuples for validation warehouses
-        max_steps: Maximum simulation steps before timeout
+        model: Trained RandomForest model
+        num_validation_samples: Number of validation samples per configuration
+        warehouse_sizes: List of warehouse sizes to validate on
+        max_steps: Maximum simulation steps
+        n_processes: Number of processes to use (defaults to CPU count - 1)
     """
-    validation_data = []
+    if n_processes is None:
+        n_processes = max(1, mp.cpu_count() - 1)
     
-    for size in warehouse_sizes:
-        rows, cols = size
-        warehouse_size = rows * cols
-        
-        # Generate validation warehouse
-        warehouse = np.zeros((rows, cols))
-        for i in range(1, rows-1, 2):
-            for j in range(1, cols-1, 2):
-                warehouse[i, j] = 1
-                
-        num_shelves = np.sum(warehouse == 1)
-        available_aisles = np.sum(warehouse == 0)
-        
-        # Test different configurations
-        num_robots = max(1, int(0.5 * np.sqrt(num_shelves)))  # 50% of sqrt(shelves)
-        num_workstations = max(1, int(0.2 * available_aisles))  # 20% of aisles
-        order_density = 0.4  # 40% order density
-        
-        print(f"\nValidating warehouse size: {size}")
-        print(f"Robots: {num_robots}")
-        print(f"Workstations: {num_workstations}")
-        
-        for _ in tqdm.tqdm(range(num_validation_samples)):
-            # Generate orders
-            orders = uniform_order_distribution(order_density, warehouse)
-            total_orders = np.sum(orders)
-            
-            # Get model prediction
-            features = pd.DataFrame([{
-                'warehouse_size': warehouse_size,
-                'num_shelves': num_shelves,
-                'num_robots': num_robots,
-                'num_workstations': num_workstations,
-                'order_density': order_density,
-                'total_orders': total_orders
-            }])
-            predicted_time = model.predict(features)[0]
-            
-            # Run actual simulation
-            warehouse_manager = WarehouseManager(warehouse)
-            warehouse_manager.initialize_robots(num_robots)
-            warehouse_manager.update_orders(orders)
-            
-            # Add workstations
-            aisle_positions = [(i, j) for i in range(rows) for j in range(cols) 
-                             if warehouse[i, j] == 0]
-            if len(aisle_positions) >= num_workstations:
-                workstation_positions = random.sample(aisle_positions, num_workstations)
-                warehouse_manager.workstations = workstation_positions
-            
-            warehouse_manager.is_playing = True
-            steps = 0
-            while steps < max_steps:
-                steps += 1
-                movement = warehouse_manager.update()
-                
-                if warehouse_manager.completed_jobs >= total_orders:
-                    break
-                    
-                if not movement and np.sum(warehouse_manager.orders) == 0:
-                    break
-            
-            validation_data.append({
-                'predicted_time': predicted_time,
-                'actual_time': steps,
-                'warehouse_size': warehouse_size,
-                'total_orders': total_orders
-            })
+    print(f"\nValidating model predictions using {n_processes} processes...")
     
-    validation_df = pd.DataFrame(validation_data)
+    validation_results = []
+    
+    # Create a pool of worker processes
+    with mp.Pool(processes=n_processes) as pool:
+        for size in warehouse_sizes:
+            rows, cols = size
+            print(f"\nValidating warehouse size {size}")
+            
+            # Generate warehouse layout
+            warehouse = generate_warehouse_layout(rows, cols)
+            available_space = np.sum(warehouse == 0)
+            
+            # Test different robot counts and order densities
+            robot_counts = [int(available_space * ratio) for ratio in [0.3, 0.5, 0.7]]
+            order_densities = [0.3, 0.5]
+            
+            # Generate parameter combinations
+            param_combinations = []
+            for robot_count in robot_counts:
+                for order_density in order_densities:
+                    for _ in range(num_validation_samples):
+                        param_combinations.append((
+                            warehouse.copy(),
+                            robot_count,
+                            order_density,
+                            max_steps
+                        ))
+            
+            # Run validation simulations in parallel
+            print(f"Running {len(param_combinations)} validation simulations...")
+            results = list(tqdm.tqdm(
+                pool.imap(run_parallel_simulations, param_combinations),
+                total=len(param_combinations)
+            ))
+            
+            # Process results and make predictions
+            for _, _, metrics in results:
+                # Prepare features for prediction
+                features = pd.DataFrame([{
+                    'warehouse_size': rows * cols,
+                    'warehouse_rows': rows,
+                    'warehouse_cols': cols,
+                    'robot_count': metrics['robot_count'],
+                    'robot_density': metrics['robot_count'] / (rows * cols),
+                    'order_probability': metrics['order_probability']
+                }])
+                
+                # Make prediction
+                predicted_steps = model.predict(features)[0]
+                
+                # Store results
+                validation_results.append({
+                    'actual_steps': metrics['steps'],
+                    'predicted_steps': predicted_steps,
+                    'error': predicted_steps - metrics['steps'],
+                    'robot_count': metrics['robot_count'],
+                    'order_probability': metrics['order_probability'],
+                    'warehouse_size': rows * cols
+                })
+    
+    # Convert to DataFrame
+    validation_df = pd.DataFrame(validation_results)
     
     # Calculate error metrics
-    mse = mean_squared_error(validation_df['actual_time'], validation_df['predicted_time'])
-    r2 = r2_score(validation_df['actual_time'], validation_df['predicted_time'])
+    mse = mean_squared_error(validation_df['actual_steps'], validation_df['predicted_steps'])
+    rmse = np.sqrt(mse)
+    r2 = r2_score(validation_df['actual_steps'], validation_df['predicted_steps'])
     
     print("\nValidation Results:")
-    print(f"Mean Squared Error: {mse:.2f}")
-    print(f"R² Score: {r2:.3f}")
+    print(f"Root Mean Squared Error: {rmse:.2f} steps")
+    print(f"R² Score: {r2:.4f}")
     
-    # Plot predicted vs actual times
+    # Plot actual vs predicted
     plt.figure(figsize=(10, 6))
-    plt.scatter(validation_df['actual_time'], validation_df['predicted_time'], 
-                alpha=0.5, label='Predictions')
-    
-    # Add perfect prediction line
-    max_time = max(validation_df['actual_time'].max(), validation_df['predicted_time'].max())
-    plt.plot([0, max_time], [0, max_time], 'r--', label='Perfect Prediction')
-    
-    plt.xlabel('Actual Completion Time')
-    plt.ylabel('Predicted Completion Time')
-    plt.title('Model Validation: Predicted vs Actual Completion Times')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # Add R² score to plot
-    plt.text(0.05, 0.95, f'R² = {r2:.3f}', transform=plt.gca().transAxes, 
-             bbox=dict(facecolor='white', alpha=0.8))
-    
+    plt.scatter(validation_df['actual_steps'], validation_df['predicted_steps'], alpha=0.5)
+    plt.plot([0, max(validation_df['actual_steps'])], [0, max(validation_df['actual_steps'])], 'r--')
+    plt.xlabel('Actual Steps')
+    plt.ylabel('Predicted Steps')
+    plt.title('Model Predictions vs Actual Completion Times')
     plt.tight_layout()
-    plt.savefig('model_validation.png', dpi=300, bbox_inches='tight')
-    plt.show()
+    plt.savefig('prediction_validation.png', dpi=300, bbox_inches='tight')
     
     # Plot error distribution
     plt.figure(figsize=(10, 6))
-    errors = validation_df['predicted_time'] - validation_df['actual_time']
-    plt.hist(errors, bins=30, alpha=0.7, color='skyblue', edgecolor='black')
-    plt.axvline(errors.mean(), color='red', linestyle='dashed', linewidth=1, 
-                label=f'Mean Error: {errors.mean():.1f}')
-    
-    plt.xlabel('Prediction Error (Predicted - Actual)')
+    plt.hist(validation_df['error'], bins=30, alpha=0.7, color='skyblue', edgecolor='black')
+    plt.axvline(0, color='red', linestyle='--', label='Zero Error')
+    plt.xlabel('Prediction Error (steps)')
     plt.ylabel('Frequency')
     plt.title('Distribution of Prediction Errors')
     plt.legend()
-    plt.grid(True, alpha=0.3)
-    
     plt.tight_layout()
     plt.savefig('prediction_errors.png', dpi=300, bbox_inches='tight')
-    plt.show()
+
+def generate_warehouse_layout(rows: int, cols: int) -> np.ndarray:
+    """Generate a warehouse layout with the specified dimensions"""
+    # Simple layout generation - can be enhanced
+    warehouse = np.ones((rows, cols))  # All shelves initially
+    
+    # Create aisles
+    for i in range(1, rows-1, 3):
+        warehouse[i, :] = 0  # Horizontal aisle
+    for j in range(1, cols-1, 3):
+        warehouse[:, j] = 0  # Vertical aisle
+        
+    return warehouse
 
 if __name__ == "__main__":
     # Choose which analysis to run
