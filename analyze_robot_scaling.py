@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.stats import pearsonr
+import os
 
 def load_and_prepare_data():
     """Load and prepare the training data"""
@@ -58,8 +59,8 @@ def analyze_completion_time_vs_robots(data_main_road: pd.DataFrame, data_origina
         df['marginal_benefit_per_robot'] = df['marginal_benefit'] / 5  # per single robot
     
     # Create visualization with more space
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(15, 18), height_ratios=[3, 2, 2])
-    plt.subplots_adjust(hspace=0.4)  # Increased space between subplots
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 14), height_ratios=[3, 2])
+    plt.subplots_adjust(hspace=0.3)  # Increase space between subplots
     
     # Plot 1: Completion Time vs Number of Robots
     # Main road layout
@@ -82,7 +83,7 @@ def analyze_completion_time_vs_robots(data_main_road: pd.DataFrame, data_origina
         p = np.poly1d(z)
         x_smooth = np.linspace(data['num_robots'].min(), data['num_robots'].max(), 100)
         return ax1.plot(x_smooth, p(x_smooth), f'{color}--', alpha=alpha, 
-                       label=f'{"Main Road" if color=="r" else "Original"} Trend')
+                       label=f"{'Main Road' if color=='r' else 'Original'} Trend")
     
     add_trend_line(grouped_main_road, 'r')
     add_trend_line(grouped_original, 'b')
@@ -190,69 +191,33 @@ def analyze_completion_time_vs_robots(data_main_road: pd.DataFrame, data_origina
     ax1.set_xlim(robot_range[0], robot_range[1])
     ax2.set_xlim(-1, len(x))
     
-    # Plot 3: Percentage Improvement Histogram
-    # Calculate percentage improvement
-    improvement_data = pd.DataFrame({
-        'num_robots': grouped_main_road['num_robots'],
-        'main_road_time': grouped_main_road['completion_time_mean'],
-        'original_time': grouped_original['completion_time_mean']
-    })
-    
-    improvement_data['percent_improvement'] = ((improvement_data['original_time'] - improvement_data['main_road_time']) / 
-                                             improvement_data['original_time'] * 100)
-    
-    # Create bar plot for percentage improvement
-    bars = ax3.bar(improvement_data['num_robots'], improvement_data['percent_improvement'],
-                  color='lightgreen', edgecolor='darkgreen', alpha=0.7)
-    
-    # Add a horizontal line at 0%
-    ax3.axhline(y=0, color='black', linestyle='-', alpha=0.3)
-    
-    # Add value labels on top of each bar
-    for bar in bars:
-        height = bar.get_height()
-        ax3.text(bar.get_x() + bar.get_width()/2., height,
-                f'{height:.1f}%',
-                ha='center', va='bottom' if height > 0 else 'top')
-    
-    ax3.set_xlabel('Number of Robots')
-    ax3.set_ylabel('Improvement (%)')
-    ax3.set_title('Percentage Improvement of Main Road Layout vs Original Layout')
-    ax3.grid(True, alpha=0.3)
-    
-    # Set x-axis limits
-    ax3.set_xlim(robot_range[0], robot_range[1])
-    
-    # Add text box with summary statistics
-    mean_improvement = improvement_data['percent_improvement'].mean()
-    max_improvement = improvement_data['percent_improvement'].max()
-    max_improvement_robots = improvement_data.loc[improvement_data['percent_improvement'].idxmax(), 'num_robots']
-    
-    summary_text = f'Summary Statistics:\n'
-    summary_text += f'Mean Improvement: {mean_improvement:.1f}%\n'
-    summary_text += f'Max Improvement: {max_improvement:.1f}%\n'
-    summary_text += f'Best at {max_improvement_robots} robots'
-    
-    ax3.text(1.02, 0.65, summary_text,
-             transform=ax3.transAxes,
-             verticalalignment='top',
-             bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
-    
     # Adjust layout to prevent overlapping
-    plt.gcf().set_size_inches(19, 18)  # Increased height to accommodate new subplot
+    plt.gcf().set_size_inches(19, 14)  # Make figure wider to accommodate legends
     plt.tight_layout()
     plt.savefig('plots/robot_scaling_comparison.png', dpi=300, bbox_inches='tight')
     plt.close()
     
-    # Print improvement analysis
-    print("\nPercentage Improvement Analysis:")
-    print("Number of Robots | Improvement (%)")
-    print("-" * 35)
-    for _, row in improvement_data.iterrows():
-        print(f"{row['num_robots']:13.0f} | {row['percent_improvement']:15.1f}")
+    # Print marginal benefit analysis
+    print("\nMarginal Benefit Analysis:")
+    print("\nMain Road Layout:")
+    print("Number of Robots | Time Reduction (per 5 robots) | Time Reduction (per robot)")
+    print("-" * 70)
+    for _, row in grouped_main_road[1:].iterrows():
+        print(f"{row['num_robots']:13.0f} | {row['marginal_benefit']:26.1f} | {row['marginal_benefit_per_robot']:23.1f}")
     
-    print(f"\nMean improvement across all configurations: {mean_improvement:.1f}%")
-    print(f"Maximum improvement: {max_improvement:.1f}% (at {max_improvement_robots} robots)")
+    print("\nOriginal Layout:")
+    print("Number of Robots | Time Reduction (per 5 robots) | Time Reduction (per robot)")
+    print("-" * 70)
+    for _, row in grouped_original[1:].iterrows():
+        print(f"{row['num_robots']:13.0f} | {row['marginal_benefit']:26.1f} | {row['marginal_benefit_per_robot']:23.1f}")
+    
+    # Calculate correlation and print summary
+    corr_main, _ = pearsonr(grouped_main_road['num_robots'], grouped_main_road['completion_time_mean'])
+    corr_orig, _ = pearsonr(grouped_original['num_robots'], grouped_original['completion_time_mean'])
+    
+    print("\nCorrelation between robots and completion time:")
+    print(f"Main Road Layout: {corr_main:.3f}")
+    print(f"Original Layout: {corr_orig:.3f}")
     
     return filtered_main_road, filtered_original, optimal_main_road, optimal_original
 
@@ -302,26 +267,193 @@ def analyze_optimal_robot_count(data):
     
     return optimal_df
 
+def load_layout_data(layout_file):
+    """Load warehouse layout data with metadata"""
+    metadata = {}
+    layout_data = None
+    
+    with open(layout_file, 'r') as f:
+        lines = f.readlines()
+        # Read metadata from header comments
+        for line in lines:
+            if line.startswith('#'):
+                key, value = line.strip('# \n').split(': ')
+                metadata[key] = value
+            else:
+                break
+        
+        # Read layout data
+        layout_data = np.loadtxt(layout_file, comments='#')
+    
+    return layout_data, metadata
+
 def main():
+    """Main analysis function"""
     # Load data
     print("Loading training data...")
-    data_main_road = pd.read_csv('warehouse_data_files/training_data_main_road.csv')
-    data_original = pd.read_csv('warehouse_data_files/training_data_original.csv')
-    
-    # Ensure numeric types
-    data_main_road['num_robots'] = pd.to_numeric(data_main_road['num_robots'])
-    data_main_road['completion_time'] = pd.to_numeric(data_main_road['completion_time'])
-    data_original['num_robots'] = pd.to_numeric(data_original['num_robots'])
-    data_original['completion_time'] = pd.to_numeric(data_original['completion_time'])
+    try:
+        # Load layout data
+        layout_file = 'layouts/warehouse_original.txt'
+        layout_data, layout_metadata = load_layout_data(layout_file)
+        
+        # Load simulation data
+        data_dir = 'layouts'  # Changed from warehouse_data_files
+        data_main_road = pd.read_csv(os.path.join(data_dir, 'training_data_main_road.csv'))
+        data_original = pd.read_csv(os.path.join(data_dir, 'training_data_original.csv'))
+        
+        print(f"Layout loaded: {layout_metadata['type']} ({layout_metadata['width']}x{layout_metadata['height']})")
+    except FileNotFoundError as e:
+        print(f"Error: Required data files not found in '{data_dir}' directory.")
+        print("Please ensure the simulation data files are present in the layouts directory.")
+        return
+    except Exception as e:
+        print(f"Error loading data: {e}")
+        return
+
+    # Set style for better visualization
+    plt.style.use('seaborn')
     
     # Analyze completion time vs robots for 1000 orders
     print("\nAnalyzing completion time vs number of robots for 1000 orders (2 workstations)...")
-    filtered_main_road, filtered_original, optimal_main_road, optimal_original = analyze_completion_time_vs_robots(
-        data_main_road, data_original, target_orders=1000, robot_range=(30, 150)
-    )
     
-    print("\nResults saved to:")
-    print("- plots/robot_scaling_comparison.png")
+    # Group and calculate statistics
+    def prepare_data(df):
+        # Group by number of robots
+        grouped = df.groupby('num_robots').agg({
+            'completion_time': ['mean', 'std'],
+            'orders_per_step': ['mean', 'std']
+        }).reset_index()
+        
+        # Flatten column names
+        grouped.columns = ['num_robots'] + [f'{col[0]}_{col[1]}' for col in grouped.columns[1:]]
+        
+        # Sort by number of robots
+        grouped = grouped.sort_values('num_robots')
+        
+        # Calculate marginal benefits
+        grouped['marginal_benefit'] = -grouped['completion_time_mean'].diff()
+        
+        return grouped
+    
+    # Prepare data for both layouts
+    grouped_main_road = prepare_data(data_main_road)
+    grouped_original = prepare_data(data_original)
+    
+    # Create figure with adjusted size and spacing
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(19, 14), height_ratios=[3, 2])
+    plt.subplots_adjust(hspace=0.3)
+    
+    # Plot 1: Completion Time vs Number of Robots
+    def plot_completion_time(ax, main_road_data, original_data):
+        # Plot main road data
+        main_line = ax.errorbar(main_road_data['num_robots'], 
+                              main_road_data['completion_time_mean'],
+                              yerr=main_road_data['completion_time_std'],
+                              fmt='ro-', linewidth=2, markersize=8, alpha=0.8,
+                              label='Main Road Layout', capsize=5)
+        
+        # Plot original layout data
+        orig_line = ax.errorbar(original_data['num_robots'], 
+                              original_data['completion_time_mean'],
+                              yerr=original_data['completion_time_std'],
+                              fmt='bo-', linewidth=2, markersize=8, alpha=0.8,
+                              label='Original Layout', capsize=5)
+        
+        # Add trend lines
+        def add_trend_line(data, color):
+            z = np.polyfit(data['num_robots'], data['completion_time_mean'], 3)
+            p = np.poly1d(z)
+            x_smooth = np.linspace(data['num_robots'].min(), data['num_robots'].max(), 100)
+            ax.plot(x_smooth, p(x_smooth), f'{color}--', alpha=0.5,
+                   label=f"{'Main Road' if color=='r' else 'Original'} Trend")
+        
+        add_trend_line(main_road_data, 'r')
+        add_trend_line(original_data, 'b')
+        
+        # Find and mark optimal points
+        main_opt_idx = main_road_data['completion_time_mean'].idxmin()
+        orig_opt_idx = original_data['completion_time_mean'].idxmin()
+        
+        main_opt = main_road_data.iloc[main_opt_idx]
+        orig_opt = original_data.iloc[orig_opt_idx]
+        
+        # Add vertical lines for optimal points
+        ax.axvline(x=main_opt['num_robots'], color='r', linestyle='--', alpha=0.3,
+                  label=f"Optimal Main Road: {main_opt['num_robots']:.0f}")
+        ax.axvline(x=orig_opt['num_robots'], color='b', linestyle='--', alpha=0.3,
+                  label=f"Optimal Original: {orig_opt['num_robots']:.0f}")
+        
+        # Add text boxes with optimal configuration details
+        text_main = (f'Main Road Layout Optimal:\n'
+                    f'Robots: {main_opt["num_robots"]:.0f}\n'
+                    f'Time: {main_opt["completion_time_mean"]:.0f} ± {main_opt["completion_time_std"]:.0f} steps\n'
+                    f'Orders/Step: {main_opt["orders_per_step_mean"]:.3f} ± {main_opt["orders_per_step_std"]:.3f}')
+        
+        text_orig = (f'Original Layout Optimal:\n'
+                    f'Robots: {orig_opt["num_robots"]:.0f}\n'
+                    f'Time: {orig_opt["completion_time_mean"]:.0f} ± {orig_opt["completion_time_std"]:.0f} steps\n'
+                    f'Orders/Step: {orig_opt["orders_per_step_mean"]:.3f} ± {orig_opt["orders_per_step_std"]:.3f}')
+        
+        # Add text boxes
+        ax.text(1.02, 0.65, text_main, transform=ax.transAxes, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.8))
+        ax.text(1.02, 0.35, text_orig, transform=ax.transAxes, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+        
+        # Customize plot
+        ax.set_xlabel('Number of Robots')
+        ax.set_ylabel('Completion Time (steps)')
+        ax.set_title('Completion Time vs Number of Robots\nWarehouse: 50x85, Orders: 1000')
+        ax.grid(True, alpha=0.3)
+        ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left')
+    
+    # Plot 2: Marginal Benefits
+    def plot_marginal_benefits(ax, main_road_data, original_data):
+        width = 0.35  # Thinner bars
+        x = np.arange(len(main_road_data['num_robots'][1:]))
+        
+        # Plot bars
+        ax.bar(x - width/2, main_road_data['marginal_benefit'][1:],
+               width, alpha=0.7, color='red', label='Main Road Layout',
+               edgecolor='darkred', linewidth=1)
+        ax.bar(x + width/2, original_data['marginal_benefit'][1:],
+               width, alpha=0.7, color='blue', label='Original Layout',
+               edgecolor='darkblue', linewidth=1)
+        
+        # Customize plot
+        ax.set_xlabel('Number of Robots')
+        ax.set_ylabel('Time Steps Reduced\nper Additional 5 Robots')
+        ax.set_title('Marginal Benefit of Adding Robots')
+        ax.grid(True, alpha=0.3)
+        ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left')
+        
+        # Set x-ticks
+        ax.set_xticks(x)
+        ax.set_xticklabels(main_road_data['num_robots'][1:].astype(int), rotation=45)
+        
+        # Add high impact regions text
+        threshold = 50
+        text = 'High Impact Regions:\n'
+        for data, name in [(main_road_data, 'Main Road'), (original_data, 'Original')]:
+            high_impact = data[data['marginal_benefit'] > threshold]['num_robots'].values
+            if len(high_impact) > 0:
+                text += f'{name}: up to {high_impact[-1]:.0f} robots\n'
+        text += f'(>{threshold} steps reduced per 5 robots)'
+        
+        ax.text(1.02, 0.65, text, transform=ax.transAxes, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    # Create plots
+    plot_completion_time(ax1, grouped_main_road, grouped_original)
+    plot_marginal_benefits(ax2, grouped_main_road, grouped_original)
+    
+    # Final adjustments
+    plt.tight_layout()
+    plt.savefig('plots/robot_scaling_comparison.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # Print analysis results
+    print("\nResults saved to: plots/robot_scaling_comparison.png")
 
 if __name__ == "__main__":
     main() 

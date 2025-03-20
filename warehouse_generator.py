@@ -1,9 +1,10 @@
 import numpy as np
 import os
 import glob
+import pandas as pd
 
-# Function to generate a warehouse matrix based on the provided rules
 def generate_warehouse(rows, cols):
+    """Generate a warehouse matrix based on the provided rules"""
     warehouse = np.zeros((rows, cols), dtype=int)
     
     # Starting column for shelves (after the initial four empty columns)
@@ -26,19 +27,45 @@ def generate_warehouse(rows, cols):
     
     return warehouse
 
-# Generate a larger warehouse (e.g., 12 rows by 20 columns)
-rows, cols = 120,200
-warehouse_data = generate_warehouse(rows, cols)
+def save_warehouse_layout(layout, filename, layout_type="original"):
+    """Save warehouse layout to file with metadata"""
+    # Create layouts directory if it doesn't exist
+    layouts_dir = 'layouts'
+    os.makedirs(layouts_dir, exist_ok=True)
+    
+    # Add metadata as header
+    metadata = {
+        'type': layout_type,
+        'height': layout.shape[0],
+        'width': layout.shape[1],
+        'timestamp': pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+    }
+    
+    # Save layout with metadata
+    filepath = os.path.join(layouts_dir, filename)
+    with open(filepath, 'w') as f:
+        # Write metadata
+        for key, value in metadata.items():
+            f.write(f"# {key}: {value}\n")
+        # Write layout data
+        np.savetxt(f, layout, fmt='%d')
+    
+    print(f"Layout saved to {filepath}")
+    return filepath
 
-# Add two rows of aisles on top by prepending rows of zeros
-warehouse_data_with_aisles = np.vstack((np.zeros((2, cols), dtype=int), warehouse_data))
-# Directory containing the warehouse data files
-data_files_dir = '/Users/xuziteng/Documents/GitHub/Warehouse2025/warehouse_data_files/'
+def main():
+    # Generate warehouse layouts
+    rows, cols = 50, 85  # Standard size
+    
+    # Generate original layout
+    warehouse_original = generate_warehouse(rows, cols)
+    # Add two rows of aisles on top
+    warehouse_original = np.vstack((np.zeros((2, cols), dtype=int), warehouse_original))
+    
+    # Save original layout
+    save_warehouse_layout(warehouse_original, 'warehouse_original.txt', 'original')
+    
+    print("Warehouse layouts generated successfully.")
 
-# Delete all files in the warehouse_data_files directory
-files = glob.glob(os.path.join(data_files_dir, '*'))
-for f in files:
-    os.remove(f)
-
-# Save the final warehouse data to a file
-np.savetxt(os.path.join(data_files_dir, 'warehouse_data.txt'), warehouse_data_with_aisles, fmt='%d')
+if __name__ == "__main__":
+    main()
