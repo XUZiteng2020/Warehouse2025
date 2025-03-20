@@ -95,75 +95,77 @@ def run_simulation(warehouse: np.ndarray,
     return result, layout_viz
 
 def generate_dataset(
-    warehouse_sizes: list = [(30, 50), (40, 70), (50, 85), (60, 100)],
-    robot_ratios: list = [0.1, 0.2, 0.3, 0.4],  # Percentage of shelf count
-    workstation_counts: list = [2, 3, 4, 5, 6],
-    order_densities: list = [0.1, 0.2, 0.3, 0.4],
-    samples_per_config: int = 3,
-    max_steps: int = 5000,
-    save_path: str = 'warehouse_data_files'
-) -> pd.DataFrame:
-    """Generate training dataset with various configurations"""
+        warehouse_sizes=[(30, 50), (40, 70), (50, 85)],
+        robot_ratios=[0.01, 0.02, 0.03, 0.05],
+        workstation_counts=[2, 3, 4, 5, 6],
+        order_densities=[0.05, 0.1, 0.2, 0.3],
+        samples_per_config=3,
+        max_steps=20000,
+        save_dir='warehouse_data_files',
+        save_layouts=True
+    ):
+    """Generate a dataset of warehouse simulations with various configurations"""
+    # Create directories if they don't exist
+    os.makedirs(save_dir, exist_ok=True)
+    if save_layouts:
+        os.makedirs(os.path.join(save_dir, 'layouts'), exist_ok=True)
     
-    # Clean up previous dataset if it exists
-    if os.path.exists(save_path):
-        shutil.rmtree(save_path)
+    # Initialize lists to store data
+    data = []
+    layout_idx = 0
     
-    # Create directories
-    os.makedirs(save_path)
-    os.makedirs(os.path.join(save_path, 'layouts'))
+    # Generate data for each configuration
+    total_configs = len(warehouse_sizes) * len(robot_ratios) * \
+                   len(workstation_counts) * len(order_densities) * samples_per_config
     
-    # Initialize new results
-    all_results = []
-    sample_id = 0
-    csv_path = os.path.join(save_path, 'training_data.csv')
-    
-    total_combinations = (len(warehouse_sizes) * len(robot_ratios) * 
-                        len(workstation_counts) * len(order_densities) * 
-                        samples_per_config)
-    
-    with tqdm(total=total_combinations, desc="Generating dataset") as pbar:
-        for width, height in warehouse_sizes:
-            warehouse = generate_warehouse_layout(width, height)
-            shelf_count = np.sum(warehouse == 1)
-            
+    with tqdm(total=total_configs, desc="Generating dataset") as pbar:
+        for w_size in warehouse_sizes:
+            width, height = w_size
             for robot_ratio in robot_ratios:
-                num_robots = max(1, int(shelf_count * robot_ratio))
-                
-                for num_workstations in workstation_counts:
+                num_robots = int(width * height * robot_ratio)
+                for ws_count in workstation_counts:
                     for order_density in order_densities:
-                        for sample in range(samples_per_config):
+                        for _ in range(samples_per_config):
+                            # Generate warehouse layout
+                            layout = generate_warehouse_layout(width, height)
+                            
+                            # Save layout if requested
+                            if save_layouts:
+                                layout_file = f'layout_{layout_idx:04d}.npy'
+                                np.save(os.path.join(save_dir, 'layouts', layout_file), layout)
+                            
                             # Run simulation
-                            result, layout_viz = run_simulation(
-                                warehouse=warehouse,
+                            shelf_count = np.sum(layout == 2)  # Count shelf cells
+                            results, layout_viz = run_simulation(
+                                warehouse=layout,
                                 num_robots=num_robots,
-                                num_workstations=num_workstations,
+                                num_workstations=ws_count,
                                 order_density=order_density,
                                 max_steps=max_steps
                             )
                             
-                            # Add shelf count and robot ratio to results
-                            result['shelf_count'] = shelf_count
-                            result['robot_ratio'] = robot_ratio
-                            result['sample_id'] = sample_id
+                            # Store data
+                            data.append({
+                                'warehouse_width': width,
+                                'warehouse_height': height,
+                                'num_robots': num_robots,
+                                'num_workstations': ws_count,
+                                'order_density': order_density,
+                                'shelf_count': shelf_count,
+                                'completion_time': results['completion_time'],
+                                'orders_per_step': results['orders_per_step'],
+                                'robot_efficiency': results['robot_efficiency'],
+                                'completion_rate': results['completion_rate']
+                            })
                             
-                            # Save layout visualization
-                            layout_filename = f'layout_{sample_id:04d}.npy'
-                            np.save(os.path.join(save_path, 'layouts', layout_filename), layout_viz)
-                            
-                            # Save result immediately
-                            all_results.append(result)
-                            df_current = pd.DataFrame([result])
-                            if os.path.exists(csv_path):
-                                df_current.to_csv(csv_path, mode='a', header=False, index=False)
-                            else:
-                                df_current.to_csv(csv_path, mode='w', header=True, index=False)
-                            
-                            sample_id += 1
+                            layout_idx += 1
                             pbar.update(1)
     
-    # Return final DataFrame
-    return pd.DataFrame(all_results)
+    # Save data to CSV
+    df = pd.DataFrame(data)
+    df.to_csv(os.path.join(save_dir, 'training_data.csv'), index=False)
+    
+    return df
 
 if __name__ == "__main__":
     generate_dataset(

@@ -37,9 +37,22 @@ class RandomForestPredictor:
             random_state=42
         )
         self.scaler = StandardScaler()
+        self.feature_names = [
+            'warehouse_width', 'warehouse_height', 'num_robots',
+            'num_workstations', 'order_density', 'shelf_count'
+        ]
+        self.target_names = [
+            'completion_time', 'orders_per_step', 
+            'robot_efficiency', 'completion_rate'
+        ]
+        self.features = None
+        self.targets = None
         
     def train(self, features, targets):
         """Train the random forest model"""
+        self.features = features
+        self.targets = targets
+        
         # Scale features
         features_scaled = self.scaler.fit_transform(features)
         
@@ -61,6 +74,33 @@ class RandomForestPredictor:
             'robot_efficiency_mae': mae[2],
             'completion_rate_mae': mae[3]
         }
+    
+    def plot_feature_importance(self):
+        """Plot feature importance for each target variable"""
+        plt.figure(figsize=(15, 10))
+        
+        # Train separate models for each target
+        for i, target in enumerate(self.target_names):
+            plt.subplot(2, 2, i+1)
+            
+            # Train a separate RF model for this target
+            rf = RandomForestRegressor(n_estimators=100, random_state=42)
+            rf.fit(self.scaler.transform(self.features), self.targets[:, i])
+            
+            importances = rf.feature_importances_
+            indices = np.argsort(importances)[::-1]
+            
+            plt.bar(range(len(self.feature_names)), 
+                   importances[indices])
+            plt.xticks(range(len(self.feature_names)), 
+                      [self.feature_names[i] for i in indices], 
+                      rotation=45)
+            plt.title(f'Feature Importance for {target}')
+            plt.tight_layout()
+        
+        os.makedirs('plots', exist_ok=True)
+        plt.savefig('plots/feature_importance.png', bbox_inches='tight')
+        plt.close()
 
 class WarehousePredictor:
     def __init__(self, data_path='warehouse_data_files'):
@@ -261,6 +301,62 @@ def plot_completion_time_comparison(ground_truth, cnn_pred, rf_pred):
     plt.savefig('plots/completion_time_comparison.png')
     plt.close()
 
+def plot_mae_comparison(cnn_metrics, rf_metrics):
+    """Plot MAE comparison between CNN and Random Forest"""
+    metrics = list(cnn_metrics.keys())
+    cnn_values = [cnn_metrics[m] for m in metrics]
+    rf_values = [rf_metrics[m] for m in metrics]
+    
+    plt.figure(figsize=(12, 6))
+    x = np.arange(len(metrics))
+    width = 0.35
+    
+    plt.bar(x - width/2, cnn_values, width, label='CNN')
+    plt.bar(x + width/2, rf_values, width, label='Random Forest')
+    
+    plt.xlabel('Metrics')
+    plt.ylabel('Mean Absolute Error')
+    plt.title('Performance Comparison: CNN vs Random Forest')
+    plt.xticks(x, [m.replace('_mae', '').replace('_', ' ').title() for m in metrics], rotation=45)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    plt.savefig('plots/mae_comparison.png')
+    plt.close()
+
+def plot_dataset_statistics(df, train_idx, test_idx):
+    """Plot statistics for training and test datasets"""
+    fig = plt.figure(figsize=(15, 10))
+    
+    # Numeric features distribution
+    numeric_features = [
+        'warehouse_width', 'warehouse_height', 'num_robots',
+        'num_workstations', 'order_density', 'shelf_count'
+    ]
+    
+    for i, feature in enumerate(numeric_features):
+        plt.subplot(2, 3, i+1)
+        sns.kdeplot(data=df.iloc[train_idx][feature], label='Train', alpha=0.5)
+        sns.kdeplot(data=df.iloc[test_idx][feature], label='Test', alpha=0.5)
+        plt.title(f'{feature.replace("_", " ").title()} Distribution')
+        plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig('plots/dataset_statistics.png')
+    plt.close()
+    
+    # Create summary statistics table
+    summary_stats = pd.DataFrame({
+        'Feature': numeric_features,
+        'Train_Mean': [df.iloc[train_idx][f].mean() for f in numeric_features],
+        'Train_Std': [df.iloc[train_idx][f].std() for f in numeric_features],
+        'Test_Mean': [df.iloc[test_idx][f].mean() for f in numeric_features],
+        'Test_Std': [df.iloc[test_idx][f].std() for f in numeric_features]
+    })
+    
+    summary_stats.to_csv('plots/dataset_statistics.csv', index=False)
+
 if __name__ == "__main__":
     # Create and train the CNN model
     print("Training CNN model...")
@@ -275,7 +371,6 @@ if __name__ == "__main__":
     rf_predictor.train(cnn_predictor.train_features, cnn_predictor.train_targets)
     
     # Get predictions from both models
-    # CNN predictions
     test_layouts_reshaped = cnn_predictor.test_layouts.reshape(
         cnn_predictor.test_layouts.shape + (1,)
     )
@@ -283,8 +378,6 @@ if __name__ == "__main__":
         [test_layouts_reshaped, cnn_predictor.test_features_scaled],
         verbose=0
     )
-    
-    # RF predictions
     rf_predictions = rf_predictor.predict(cnn_predictor.test_features)
     
     # Evaluate both models
@@ -303,10 +396,27 @@ if __name__ == "__main__":
     for metric, value in rf_metrics.items():
         print(f"{metric}: {value:.4f}")
     
-    # Plot completion time comparison
+    # Generate visualizations
+    print("\nGenerating visualizations...")
+    
+    # 1. Feature importance analysis
+    rf_predictor.plot_feature_importance()
+    print("Feature importance plot saved as 'plots/feature_importance.png'")
+    
+    # 2. MAE comparison
+    plot_mae_comparison(cnn_metrics, rf_metrics)
+    print("MAE comparison plot saved as 'plots/mae_comparison.png'")
+    
+    # 3. Dataset statistics
+    train_idx = np.arange(len(cnn_predictor.train_features))
+    test_idx = np.arange(len(cnn_predictor.train_features), len(cnn_predictor.df))
+    plot_dataset_statistics(cnn_predictor.df, train_idx, test_idx)
+    print("Dataset statistics saved as 'plots/dataset_statistics.png' and 'plots/dataset_statistics.csv'")
+    
+    # Original completion time comparison
     plot_completion_time_comparison(
-        cnn_predictor.test_targets[:, 0],  # Ground truth
-        cnn_predictions[:, 0],             # CNN predictions
-        rf_predictions[:, 0]               # RF predictions
+        cnn_predictor.test_targets[:, 0],
+        cnn_predictions[:, 0],
+        rf_predictions[:, 0]
     )
-    print("\nComparison plot saved as 'plots/completion_time_comparison.png'") 
+    print("Completion time comparison plot saved as 'plots/completion_time_comparison.png'") 
