@@ -2,11 +2,14 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestRegressor
 import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Concatenate
 import os
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # Enable Metal backend
 physical_devices = tf.config.list_physical_devices('GPU')
@@ -26,6 +29,39 @@ def pad_layout(layout, target_height, target_width):
         constant_values=0
     )
 
+class RandomForestPredictor:
+    def __init__(self):
+        self.model = RandomForestRegressor(
+            n_estimators=100,
+            max_depth=None,
+            random_state=42
+        )
+        self.scaler = StandardScaler()
+        
+    def train(self, features, targets):
+        """Train the random forest model"""
+        # Scale features
+        features_scaled = self.scaler.fit_transform(features)
+        
+        # Train model
+        self.model.fit(features_scaled, targets)
+        
+    def predict(self, features):
+        """Make predictions"""
+        features_scaled = self.scaler.transform(features)
+        return self.model.predict(features_scaled)
+    
+    def evaluate(self, features, targets):
+        """Evaluate model performance"""
+        predictions = self.predict(features)
+        mae = np.mean(np.abs(predictions - targets), axis=0)
+        return {
+            'completion_time_mae': mae[0],
+            'orders_per_step_mae': mae[1],
+            'robot_efficiency_mae': mae[2],
+            'completion_rate_mae': mae[3]
+        }
+
 class WarehousePredictor:
     def __init__(self, data_path='warehouse_data_files'):
         self.data_path = data_path
@@ -39,7 +75,7 @@ class WarehousePredictor:
     def load_data(self):
         """Load and preprocess the dataset"""
         # Load CSV data
-        df = pd.read_csv(self.csv_path)
+        self.df = pd.read_csv(self.csv_path)
         
         # Load layout data
         layouts = []
@@ -48,7 +84,7 @@ class WarehousePredictor:
         # First pass to find maximum dimensions
         max_height = 0
         max_width = 0
-        for idx in tqdm(range(len(df)), desc="Finding max dimensions"):
+        for idx in tqdm(range(len(self.df)), desc="Finding max dimensions"):
             layout_file = f'layout_{idx:04d}.npy'
             layout = np.load(os.path.join(self.layout_path, layout_file))
             max_height = max(max_height, layout.shape[0])
@@ -56,7 +92,7 @@ class WarehousePredictor:
         
         # Second pass to load and pad layouts
         print("\nPadding layouts...")
-        for idx in tqdm(range(len(df)), desc="Loading and padding"):
+        for idx in tqdm(range(len(self.df)), desc="Loading and padding"):
             layout_file = f'layout_{idx:04d}.npy'
             layout = np.load(os.path.join(self.layout_path, layout_file))
             padded_layout = pad_layout(layout, max_height, max_width)
@@ -68,23 +104,23 @@ class WarehousePredictor:
         layouts = layouts / 3.0  # Since we have values 0,1,2,3
         
         # Extract features and targets
-        features_numeric = df[[
+        self.features_numeric = self.df[[
             'warehouse_width', 'warehouse_height', 'num_robots',
             'num_workstations', 'order_density', 'shelf_count'
         ]].values
         
-        targets = df[[
+        self.targets = self.df[[
             'completion_time', 'orders_per_step', 
             'robot_efficiency', 'completion_rate'
         ]].values
         
         # Split the data
-        indices = np.arange(len(df))
+        indices = np.arange(len(self.df))
         (train_idx, test_idx, 
          self.train_layouts, self.test_layouts,
          self.train_features, self.test_features,
          self.train_targets, self.test_targets) = train_test_split(
-            indices, layouts, features_numeric, targets, 
+            indices, layouts, self.features_numeric, self.targets, 
             test_size=0.2, random_state=42
         )
         
@@ -201,25 +237,76 @@ class WarehousePredictor:
         
         return metrics
 
+def plot_completion_time_comparison(ground_truth, cnn_pred, rf_pred):
+    """Plot completion time comparison between ground truth and predictions"""
+    plt.figure(figsize=(12, 6))
+    
+    # Create scatter plot
+    plt.scatter(ground_truth, cnn_pred, alpha=0.5, label='CNN Predictions')
+    plt.scatter(ground_truth, rf_pred, alpha=0.5, label='Random Forest Predictions')
+    
+    # Add perfect prediction line
+    min_val = min(ground_truth.min(), cnn_pred.min(), rf_pred.min())
+    max_val = max(ground_truth.max(), cnn_pred.max(), rf_pred.max())
+    plt.plot([min_val, max_val], [min_val, max_val], 'k--', label='Perfect Prediction')
+    
+    plt.xlabel('Ground Truth Completion Time')
+    plt.ylabel('Predicted Completion Time')
+    plt.title('Completion Time: Ground Truth vs Predictions')
+    plt.legend()
+    plt.grid(True)
+    
+    # Save plot
+    os.makedirs('plots', exist_ok=True)
+    plt.savefig('plots/completion_time_comparison.png')
+    plt.close()
+
 if __name__ == "__main__":
-    # Create and train the model
-    predictor = WarehousePredictor()
-    predictor.load_data()
-    predictor.build_model()
+    # Create and train the CNN model
+    print("Training CNN model...")
+    cnn_predictor = WarehousePredictor()
+    cnn_predictor.load_data()
+    cnn_predictor.build_model()
+    cnn_history = cnn_predictor.train(epochs=50, batch_size=32)
     
-    # Train the model
-    history = predictor.train(epochs=50, batch_size=32)
+    # Create and train the Random Forest model
+    print("\nTraining Random Forest model...")
+    rf_predictor = RandomForestPredictor()
+    rf_predictor.train(cnn_predictor.train_features, cnn_predictor.train_targets)
     
-    # Evaluate performance
-    metrics = predictor.evaluate()
-    print("\nTest Set Performance:")
-    for metric, value in metrics.items():
+    # Get predictions from both models
+    # CNN predictions
+    test_layouts_reshaped = cnn_predictor.test_layouts.reshape(
+        cnn_predictor.test_layouts.shape + (1,)
+    )
+    cnn_predictions = cnn_predictor.model.predict(
+        [test_layouts_reshaped, cnn_predictor.test_features_scaled],
+        verbose=0
+    )
+    
+    # RF predictions
+    rf_predictions = rf_predictor.predict(cnn_predictor.test_features)
+    
+    # Evaluate both models
+    print("\nCNN Model Performance:")
+    cnn_metrics = {
+        'completion_time_mae': np.mean(np.abs(cnn_predictions[:, 0] - cnn_predictor.test_targets[:, 0])),
+        'orders_per_step_mae': np.mean(np.abs(cnn_predictions[:, 1] - cnn_predictor.test_targets[:, 1])),
+        'robot_efficiency_mae': np.mean(np.abs(cnn_predictions[:, 2] - cnn_predictor.test_targets[:, 2])),
+        'completion_rate_mae': np.mean(np.abs(cnn_predictions[:, 3] - cnn_predictor.test_targets[:, 3]))
+    }
+    for metric, value in cnn_metrics.items():
         print(f"{metric}: {value:.4f}")
     
-    # Example prediction
-    sample_layout = predictor.test_layouts[0]
-    sample_features = predictor.test_features[0]
-    prediction = predictor.predict(sample_layout, sample_features)
-    print("\nSample Prediction:")
-    for metric, value in prediction.items():
-        print(f"{metric}: {value:.4f}") 
+    print("\nRandom Forest Model Performance:")
+    rf_metrics = rf_predictor.evaluate(cnn_predictor.test_features, cnn_predictor.test_targets)
+    for metric, value in rf_metrics.items():
+        print(f"{metric}: {value:.4f}")
+    
+    # Plot completion time comparison
+    plot_completion_time_comparison(
+        cnn_predictor.test_targets[:, 0],  # Ground truth
+        cnn_predictions[:, 0],             # CNN predictions
+        rf_predictions[:, 0]               # RF predictions
+    )
+    print("\nComparison plot saved as 'plots/completion_time_comparison.png'") 
