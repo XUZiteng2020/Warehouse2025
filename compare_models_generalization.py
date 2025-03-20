@@ -10,62 +10,6 @@ from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras.regularizers import l1_l2
 import os
 
-class NeuralNetworkPredictor:
-    def __init__(self):
-        self.model = None
-        self.scaler_x = StandardScaler()
-        self.scaler_y = StandardScaler()
-        
-    def create_model(self, input_dim):
-        """Create neural network architecture with regularization"""
-        regularizer = l1_l2(l1=0.01, l2=0.01)
-        
-        model = Sequential([
-            Dense(128, activation='relu', input_dim=input_dim,
-                  kernel_regularizer=regularizer),
-            Dropout(0.3),  # Increased dropout
-            Dense(64, activation='relu',
-                  kernel_regularizer=regularizer),
-            Dropout(0.3),
-            Dense(32, activation='relu',
-                  kernel_regularizer=regularizer),
-            Dense(4)  # 4 outputs: completion_time, orders_per_step, robot_efficiency, completion_rate
-        ])
-        
-        model.compile(optimizer='adam', loss='mse')
-        return model
-    
-    def train(self, X, y):
-        """Train the neural network"""
-        # Scale features and targets
-        X_scaled = self.scaler_x.fit_transform(X)
-        y_scaled = self.scaler_y.fit_transform(y)
-        
-        # Create and train model
-        self.model = self.create_model(X.shape[1])
-        
-        # Added early stopping
-        early_stopping = tf.keras.callbacks.EarlyStopping(
-            monitor='val_loss',
-            patience=10,
-            restore_best_weights=True
-        )
-        
-        self.model.fit(
-            X_scaled, y_scaled,
-            epochs=200,  # Increased epochs since we have early stopping
-            batch_size=32,
-            validation_split=0.2,
-            callbacks=[early_stopping],
-            verbose=1
-        )
-    
-    def predict(self, X):
-        """Make predictions"""
-        X_scaled = self.scaler_x.transform(X)
-        y_pred_scaled = self.model.predict(X_scaled, verbose=0)
-        return self.scaler_y.inverse_transform(y_pred_scaled)
-
 def load_and_split_data():
     """Load data and split into training (small) and test (medium) warehouses"""
     data = pd.read_csv('warehouse_data_files/training_data.csv')
@@ -87,20 +31,44 @@ def load_and_split_data():
     
     return train_data, test_data
 
-def prepare_data(data, include_robot_density=False):
-    """Prepare features and targets with optional robot density feature"""
+def prepare_data(data, include_robot_density=False, include_throughput_estimate=False, waiting_time_constant=5):
+    """Prepare features and targets with optional robot density and throughput estimate features"""
     # Basic features
     basic_features = data[[
         'warehouse_width', 'warehouse_height', 'num_robots',
-        'num_workstations', 'order_density', 'shelf_count'
+        'num_workstations', 'shelf_count', 'total_orders'  # Removed order_density, kept total_orders
     ]].values
+    
+    features = basic_features
     
     if include_robot_density:
         # Calculate and add robot density feature
         robot_density = data['num_robots'] / (data['warehouse_width'] + data['warehouse_height'])
-        features = np.column_stack((basic_features, robot_density))
-    else:
-        features = basic_features
+        features = np.column_stack((features, robot_density))
+    
+    if include_throughput_estimate:
+        # Calculate estimated throughput and completion time
+        expected_travel_length = (data['warehouse_width'] + data['warehouse_height']) / 2
+        robot_density = data['num_robots'] / (data['warehouse_width'] * data['warehouse_height'])
+        
+        # Base throughput without waiting
+        base_throughput = data['num_robots'] / expected_travel_length
+        
+        # Waiting time impact increases with robot density and warehouse size
+        waiting_impact = (robot_density * waiting_time_constant * 
+                         (data['warehouse_width'] + data['warehouse_height']) / 2)
+        
+        # Final throughput with waiting time penalty
+        estimated_throughput = base_throughput / (1 + waiting_impact)
+        
+        # Add both throughput and its components as features
+        completion_time_estimate = 1 / estimated_throughput
+        features = np.column_stack((
+            features, 
+            completion_time_estimate,
+            base_throughput,
+            waiting_impact
+        ))
     
     targets = data[[
         'completion_time', 'orders_per_step',
@@ -108,74 +76,6 @@ def prepare_data(data, include_robot_density=False):
     ]].values
     
     return features, targets
-
-def evaluate_model(model, features, targets, model_name):
-    """Evaluate model performance"""
-    predictions = model.predict(features)
-    
-    # Calculate metrics for each target variable
-    target_names = ['completion_time', 'orders_per_step', 'robot_efficiency', 'completion_rate']
-    metrics = {}
-    
-    for i, target in enumerate(target_names):
-        mae = mean_absolute_error(targets[:, i], predictions[:, i])
-        metrics[f"{model_name}_{target}_mae"] = mae
-    
-    return predictions, metrics
-
-def plot_comparison(test_data, rf_predictions, nn_predictions):
-    """Create visualization comparing both models"""
-    os.makedirs('plots', exist_ok=True)
-    
-    # Plot completion time predictions
-    plt.figure(figsize=(12, 6))
-    
-    # Random Forest predictions
-    plt.scatter(test_data['completion_time'], rf_predictions[:, 0], 
-               alpha=0.5, label='Random Forest', color='blue')
-    
-    # Neural Network predictions
-    plt.scatter(test_data['completion_time'], nn_predictions[:, 0], 
-               alpha=0.5, label='Neural Network', color='red')
-    
-    # Add perfect prediction line
-    min_val = min(test_data['completion_time'].min(), 
-                 rf_predictions[:, 0].min(),
-                 nn_predictions[:, 0].min())
-    max_val = max(test_data['completion_time'].max(),
-                 rf_predictions[:, 0].max(),
-                 nn_predictions[:, 0].max())
-    plt.plot([min_val, max_val], [min_val, max_val], 'k--', label='Perfect Prediction')
-    
-    plt.xlabel('Actual Completion Time')
-    plt.ylabel('Predicted Completion Time')
-    plt.title('Model Comparison: 50x85 Warehouse Predictions')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    plt.savefig('plots/model_comparison.png')
-    plt.close()
-    
-    # Save detailed results
-    results_df = pd.DataFrame({
-        'actual_completion_time': test_data['completion_time'],
-        'rf_predicted_completion_time': rf_predictions[:, 0],
-        'nn_predicted_completion_time': nn_predictions[:, 0],
-        'actual_orders_per_step': test_data['orders_per_step'],
-        'rf_predicted_orders_per_step': rf_predictions[:, 1],
-        'nn_predicted_orders_per_step': nn_predictions[:, 1],
-        'actual_robot_efficiency': test_data['robot_efficiency'],
-        'rf_predicted_robot_efficiency': rf_predictions[:, 2],
-        'nn_predicted_robot_efficiency': nn_predictions[:, 2],
-        'actual_completion_rate': test_data['completion_rate'],
-        'rf_predicted_completion_rate': rf_predictions[:, 3],
-        'nn_predicted_completion_rate': nn_predictions[:, 3],
-        'num_robots': test_data['num_robots'],
-        'num_workstations': test_data['num_workstations'],
-        'order_density': test_data['order_density'],
-        'robot_density': test_data['num_robots'] / (test_data['warehouse_width'] + test_data['warehouse_height'])
-    })
-    results_df.to_csv('plots/model_comparison_results.csv', index=False)
 
 def main():
     # Set random seeds for reproducibility
@@ -186,120 +86,160 @@ def main():
     print("Loading and splitting data...")
     train_data, test_data = load_and_split_data()
     
-    # Test models without robot density feature
-    print("\n=== Models without Robot Density Feature ===")
+    # Test models with basic features (including actual orders)
+    print("\n=== Models with Basic Features (Including Total Orders) ===")
+    X_train, y_train = prepare_data(train_data, include_robot_density=False, include_throughput_estimate=False)
+    X_test, y_test = prepare_data(test_data, include_robot_density=False, include_throughput_estimate=False)
     
-    # Prepare data without robot density
-    X_train, y_train = prepare_data(train_data, include_robot_density=False)
-    X_test, y_test = prepare_data(test_data, include_robot_density=False)
-    
-    # Train and evaluate Random Forest
-    print("\nTraining Random Forest on small warehouses...")
+    print("\nTraining Random Forest with basic features...")
     rf_model_basic = RandomForestPredictor()
     rf_model_basic.train(X_train, y_train)
-    
-    print("Evaluating Random Forest on medium warehouse...")
     rf_predictions_basic, rf_metrics_basic = evaluate_model(rf_model_basic, X_test, y_test, "rf_basic")
     
-    # Train and evaluate Neural Network
-    print("\nTraining Neural Network on small warehouses...")
-    nn_model_basic = NeuralNetworkPredictor()
-    nn_model_basic.train(X_train, y_train)
+    # Test models with different waiting time constants (throughput only)
+    print("\n=== Testing Different Waiting Time Constants (Throughput Only) ===")
+    waiting_time_constants = [0.1, 0.5, 1, 2, 5, 10, 20, 50, 100]
+    throughput_metrics = {}
+    throughput_predictions = {}
     
-    print("Evaluating Neural Network on medium warehouse...")
-    nn_predictions_basic, nn_metrics_basic = evaluate_model(nn_model_basic, X_test, y_test, "nn_basic")
+    for wtc in waiting_time_constants:
+        print(f"\nTesting waiting_time_constant = {wtc}")
+        
+        # Prepare data with throughput estimate only
+        X_train, y_train = prepare_data(train_data, include_robot_density=False, 
+                                      include_throughput_estimate=True, 
+                                      waiting_time_constant=wtc)
+        X_test, y_test = prepare_data(test_data, include_robot_density=False, 
+                                    include_throughput_estimate=True, 
+                                    waiting_time_constant=wtc)
+        
+        print(f"Training Random Forest...")
+        rf_model_throughput = RandomForestPredictor()
+        rf_model_throughput.train(X_train, y_train)
+        
+        predictions, metrics = evaluate_model(rf_model_throughput, X_test, y_test, f"rf_throughput_wtc{wtc}")
+        
+        throughput_metrics[wtc] = metrics
+        throughput_predictions[wtc] = predictions
     
-    # Test models with robot density feature
-    print("\n=== Models with Robot Density Feature ===")
+    # Find best waiting time constant
+    best_wtc = min(waiting_time_constants, 
+                   key=lambda x: throughput_metrics[x][f"rf_throughput_wtc{x}_completion_time_mae"])
     
-    # Prepare data with robot density
-    X_train, y_train = prepare_data(train_data, include_robot_density=True)
-    X_test, y_test = prepare_data(test_data, include_robot_density=True)
+    print(f"\nBest waiting time constant: {best_wtc}")
+    print("\nCompletion Time MAE for different waiting time constants:")
+    for wtc in waiting_time_constants:
+        mae = throughput_metrics[wtc][f"rf_throughput_wtc{wtc}_completion_time_mae"]
+        print(f"WTC = {wtc}: {mae:.4f}")
     
-    # Train and evaluate Random Forest
-    print("\nTraining Random Forest on small warehouses...")
-    rf_model = RandomForestPredictor()
-    rf_model.train(X_train, y_train)
+    # Test model with all features using best WTC
+    print(f"\n=== Models with All Features (WTC = {best_wtc}) ===")
+    X_train, y_train = prepare_data(train_data, include_robot_density=True, 
+                                  include_throughput_estimate=True,
+                                  waiting_time_constant=best_wtc)
+    X_test, y_test = prepare_data(test_data, include_robot_density=True, 
+                                include_throughput_estimate=True,
+                                waiting_time_constant=best_wtc)
     
-    print("Evaluating Random Forest on medium warehouse...")
-    rf_predictions, rf_metrics = evaluate_model(rf_model, X_test, y_test, "rf")
-    
-    # Train and evaluate Neural Network
-    print("\nTraining Neural Network on small warehouses...")
-    nn_model = NeuralNetworkPredictor()
-    nn_model.train(X_train, y_train)
-    
-    print("Evaluating Neural Network on medium warehouse...")
-    nn_predictions, nn_metrics = evaluate_model(nn_model, X_test, y_test, "nn")
+    print("\nTraining Random Forest with all features...")
+    rf_model_all = RandomForestPredictor()
+    rf_model_all.train(X_train, y_train)
+    rf_predictions_all, rf_metrics_all = evaluate_model(rf_model_all, X_test, y_test, "rf_all")
     
     # Print comparison metrics
-    print("\nModel Performance Comparison on 50x85 Warehouse:")
-    metrics = {**rf_metrics_basic, **nn_metrics_basic, **rf_metrics, **nn_metrics}
+    print("\nRandom Forest Performance Comparison on 50x85 Warehouse:")
+    metrics = {
+        **rf_metrics_basic,
+        **{f"rf_throughput_{target}_mae": throughput_metrics[best_wtc][f"rf_throughput_wtc{best_wtc}_{target}_mae"]
+           for target in ['completion_time', 'orders_per_step', 'robot_efficiency', 'completion_rate']},
+        **rf_metrics_all
+    }
     target_names = ['completion_time', 'orders_per_step', 'robot_efficiency', 'completion_rate']
     
     for target in target_names:
         print(f"\n{target}:")
-        rf_basic_mae = metrics[f"rf_basic_{target}_mae"]
-        nn_basic_mae = metrics[f"nn_basic_{target}_mae"]
-        rf_mae = metrics[f"rf_{target}_mae"]
-        nn_mae = metrics[f"nn_{target}_mae"]
+        basic_mae = metrics[f"rf_basic_{target}_mae"]
+        throughput_mae = metrics[f"rf_throughput_{target}_mae"]
+        all_mae = metrics[f"rf_all_{target}_mae"]
         
-        print("Without Robot Density Feature:")
-        print(f"  Random Forest MAE: {rf_basic_mae:.4f}")
-        print(f"  Neural Network MAE: {nn_basic_mae:.4f}")
-        print(f"  Difference: {((rf_basic_mae - nn_basic_mae) / rf_basic_mae * 100):.1f}%")
+        print("Basic Features with Total Orders:")
+        print(f"  MAE: {basic_mae:.4f}")
         
-        print("\nWith Robot Density Feature:")
-        print(f"  Random Forest MAE: {rf_mae:.4f}")
-        print(f"  Neural Network MAE: {nn_mae:.4f}")
-        print(f"  Difference: {((rf_mae - nn_mae) / rf_mae * 100):.1f}%")
+        print(f"\nWith Throughput Estimate Only (WTC = {best_wtc}):")
+        print(f"  MAE: {throughput_mae:.4f}")
+        print(f"  Improvement over basic: {((basic_mae - throughput_mae) / basic_mae * 100):.1f}%")
         
-        print(f"\nFeature Impact:")
-        print(f"  Random Forest Improvement: {((rf_basic_mae - rf_mae) / rf_basic_mae * 100):.1f}%")
-        print(f"  Neural Network Improvement: {((nn_basic_mae - nn_mae) / nn_basic_mae * 100):.1f}%")
+        print("\nWith All Features:")
+        print(f"  MAE: {all_mae:.4f}")
+        print(f"  Improvement over basic: {((basic_mae - all_mae) / basic_mae * 100):.1f}%")
     
     # Create visualizations
     print("\nGenerating visualizations...")
     
-    # Plot completion time predictions for all models
+    # Plot completion time predictions
     plt.figure(figsize=(15, 8))
     
-    # Basic models
+    # Basic model with total orders
     plt.scatter(test_data['completion_time'], rf_predictions_basic[:, 0], 
-               alpha=0.5, label='Random Forest (Basic)', color='blue')
-    plt.scatter(test_data['completion_time'], nn_predictions_basic[:, 0], 
-               alpha=0.5, label='Neural Network (Basic)', color='red')
+               alpha=0.5, label='Basic + Total Orders', color='blue')
     
-    # Models with robot density
-    plt.scatter(test_data['completion_time'], rf_predictions[:, 0], 
-               alpha=0.5, label='Random Forest (with Robot Density)', color='cyan')
-    plt.scatter(test_data['completion_time'], nn_predictions[:, 0], 
-               alpha=0.5, label='Neural Network (with Robot Density)', color='magenta')
+    # Model with throughput estimate only
+    plt.scatter(test_data['completion_time'], throughput_predictions[best_wtc][:, 0], 
+               alpha=0.5, label=f'Throughput Only (WTC={best_wtc})', color='red')
+    
+    # Model with all features
+    plt.scatter(test_data['completion_time'], rf_predictions_all[:, 0], 
+               alpha=0.5, label='All Features', color='magenta')
     
     # Add perfect prediction line
-    min_val = min(test_data['completion_time'].min(), 
-                 rf_predictions_basic[:, 0].min(),
-                 nn_predictions_basic[:, 0].min(),
-                 rf_predictions[:, 0].min(),
-                 nn_predictions[:, 0].min())
-    max_val = max(test_data['completion_time'].max(),
-                 rf_predictions_basic[:, 0].max(),
-                 nn_predictions_basic[:, 0].max(),
-                 rf_predictions[:, 0].max(),
-                 nn_predictions[:, 0].max())
+    min_val = min(
+        test_data['completion_time'].min(), 
+        rf_predictions_basic[:, 0].min(),
+        throughput_predictions[best_wtc][:, 0].min(),
+        rf_predictions_all[:, 0].min()
+    )
+    max_val = max(
+        test_data['completion_time'].max(),
+        rf_predictions_basic[:, 0].max(),
+        throughput_predictions[best_wtc][:, 0].max(),
+        rf_predictions_all[:, 0].max()
+    )
     plt.plot([min_val, max_val], [min_val, max_val], 'k--', label='Perfect Prediction')
     
     plt.xlabel('Actual Completion Time')
     plt.ylabel('Predicted Completion Time')
-    plt.title('Model Comparison: Impact of Robot Density Feature')
+    plt.title('Model Comparison: Impact of Features')
     plt.legend()
     plt.grid(True, alpha=0.3)
     
-    plt.savefig('plots/feature_impact_comparison.png')
+    plt.savefig('plots/feature_comparison.png')
+    plt.close()
+    
+    # Plot MAE vs waiting time constant
+    plt.figure(figsize=(10, 6))
+    wtc_values = list(waiting_time_constants)
+    mae_values = [throughput_metrics[wtc][f"rf_throughput_wtc{wtc}_completion_time_mae"] 
+                 for wtc in waiting_time_constants]
+    
+    plt.plot(wtc_values, mae_values, 'b-', marker='o', label='Throughput Only')
+    plt.axhline(y=rf_metrics_basic['rf_basic_completion_time_mae'], 
+                color='r', linestyle='--', label='Basic + Total Orders')
+    plt.axhline(y=rf_metrics_all['rf_all_completion_time_mae'],
+                color='m', linestyle='--', label='All Features')
+    
+    plt.xscale('log')  # Use log scale for better visualization
+    plt.xlabel('Waiting Time Constant (log scale)')
+    plt.ylabel('Completion Time MAE')
+    plt.title('Impact of Waiting Time Constant on Model Performance')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    plt.savefig('plots/waiting_time_constant_comparison.png')
     plt.close()
     
     print("\nResults saved to:")
-    print("- plots/feature_impact_comparison.png")
+    print("- plots/feature_comparison.png")
+    print("- plots/waiting_time_constant_comparison.png")
 
 if __name__ == "__main__":
     main() 

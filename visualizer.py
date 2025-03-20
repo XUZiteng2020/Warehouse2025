@@ -429,7 +429,7 @@ class WarehouseVisualizer:
                               robot.status == RobotStatus.WORKING)
             
             self.draw_ui()
-            pygame.display.flip()
+        pygame.display.flip()
             clock.tick(60)
     
     pygame.quit()
