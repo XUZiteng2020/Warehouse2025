@@ -142,38 +142,11 @@ def is_directional_aisle(warehouse: np.ndarray, pos: Tuple[int, int]) -> Optiona
     x, y = pos
     rows, cols = warehouse.shape
     
-    # Skip if position is not an aisle
-    if warehouse[x, y] != 0:
-        return None
-    
-    # Check for horizontal aisle (look north and south)
-    north_wall = x == 0 or warehouse[x-1, y] == 1
-    south_wall = x == rows-1 or warehouse[x+1, y] == 1
-    
-    if north_wall and south_wall:
-        # Check if part of 2-width aisle by checking adjacent position
-        if y > 0 and y < cols-1:
-            # Check left and right
-            left_is_aisle = warehouse[x, y-1] == 0
-            right_is_aisle = warehouse[x, y+1] == 0
-            
-            # If aisle continues both left and right, check if there's another parallel aisle
-            if left_is_aisle and right_is_aisle:
-                # Check if there's a parallel aisle to the north or south
-                parallel_aisle_north = x > 1 and warehouse[x-2, y] == 0
-                parallel_aisle_south = x < rows-2 and warehouse[x+2, y] == 0
-                
-                if parallel_aisle_north:
-                    # This is a horizontal 2-width aisle
-                    # If we're in bottom row, we're on right side for eastbound
-                    is_right_side = x > x-2  # We're in the southern aisle
-                    return (is_right_side, 0)  # Eastbound
-                    
-                if parallel_aisle_south:
-                    # This is a horizontal 2-width aisle
-                    # If we're in top row, we're on right side for westbound
-                    is_right_side = x < x+2  # We're in the northern aisle
-                    return (is_right_side, 2)  # Westbound
+    # Check if position is in a directional aisle (marked by negative values)
+    if warehouse[x, y] == -1:  # Rightward aisle
+        return (True, 0)  # Both lanes go right
+    elif warehouse[x, y] == -2:  # Leftward aisle
+        return (True, 2)  # Both lanes go left
     
     # Check for vertical aisle (look east and west)
     east_wall = y == cols-1 or warehouse[x, y+1] == 1
@@ -183,14 +156,14 @@ def is_directional_aisle(warehouse: np.ndarray, pos: Tuple[int, int]) -> Optiona
         # Check if part of 2-width aisle by checking adjacent position
         if x > 0 and x < rows-1:
             # Check up and down
-            up_is_aisle = warehouse[x-1, y] == 0
-            down_is_aisle = warehouse[x+1, y] == 0
+            up_is_aisle = warehouse[x-1, y] == 0 or warehouse[x-1, y] < 0
+            down_is_aisle = warehouse[x+1, y] == 0 or warehouse[x+1, y] < 0
             
             # If aisle continues both up and down, check if there's another parallel aisle
             if up_is_aisle and down_is_aisle:
                 # Check if there's a parallel aisle to the east or west
-                parallel_aisle_east = y < cols-2 and warehouse[x, y+2] == 0
-                parallel_aisle_west = y > 1 and warehouse[x, y-2] == 0
+                parallel_aisle_east = y < cols-2 and (warehouse[x, y+2] == 0 or warehouse[x, y+2] < 0)
+                parallel_aisle_west = y > 1 and (warehouse[x, y-2] == 0 or warehouse[x, y-2] < 0)
                 
                 if parallel_aisle_east:
                     # This is a vertical 2-width aisle

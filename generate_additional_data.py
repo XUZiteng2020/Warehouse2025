@@ -8,13 +8,14 @@ from order_generation import uniform_order_distribution
 from multiprocessing import Pool, cpu_count
 import itertools
 
-def generate_warehouse_layout(width: int, height: int) -> np.ndarray:
+def generate_original_layout(width: int, height: int) -> np.ndarray:
     """
-    Generate a warehouse layout with the following pattern:
+    Generate a warehouse layout with the original bi-directional aisles pattern:
     - 4 empty columns at the start
     - 5x2 shelf blocks
     - 2-cell wide aisles between shelf blocks
     - 2 empty rows at the top
+    - Each horizontal aisle pair has opposite directions
     """
     layout = np.zeros((height, width), dtype=int)
     
@@ -33,9 +34,85 @@ def generate_warehouse_layout(width: int, height: int) -> np.ndarray:
         while col + shelf_block_width <= width:
             layout[row:row + shelf_block_height, col:col + shelf_block_width] = 1
             col += shelf_block_width + aisle_width
+        
+        # Mark aisle directions for each pair (one lane right, one lane left)
+        if row > start_row:  # If this is an aisle (not the first row)
+            # Upper lane goes right (-1), lower lane goes left (-2)
+            layout[row - aisle_width, start_col:] = -1  # Upper lane rightward
+            layout[row - aisle_width + 1, start_col:] = -2  # Lower lane leftward
+            
         row += shelf_block_height + aisle_width
     
     return layout
+
+def generate_warehouse_layout(width: int, height: int, layout_type: str = "main_road") -> np.ndarray:
+    """
+    Generate a warehouse layout with the specified pattern.
+    
+    Args:
+        width: Warehouse width
+        height: Warehouse height
+        layout_type: "main_road" for single-direction aisles or "original" for bi-directional pairs
+    """
+    if layout_type == "original":
+        return generate_original_layout(width, height)
+    else:  # main_road
+        layout = np.zeros((height, width), dtype=int)
+        
+        # Configuration parameters
+        start_row = 2  # 2 empty rows at top
+        start_col = 4  # 4 empty columns at start
+        shelf_block_width = 5
+        shelf_block_height = 2
+        main_road_width = 3  # Increased from 2 to 3
+        intersection_buffer = 1  # Buffer zone at intersections
+        
+        # Keep track of aisle directions (0: rightward, 2: leftward)
+        aisle_directions = []
+        current_direction = 0  # Start with rightward
+        
+        row = start_row
+        aisle_count = 0
+        while row + shelf_block_height <= height:
+            col = start_col
+            while col + shelf_block_width <= width:
+                # Add buffer zone before shelf block at intersections
+                if col > start_col:
+                    layout[row:row + shelf_block_height, col - intersection_buffer:col] = -3  # Buffer zone
+                
+                # Place shelf block
+                layout[row:row + shelf_block_height, col:col + shelf_block_width] = 1
+                col += shelf_block_width + main_road_width
+            
+            # Store direction for this aisle pair
+            if row > start_row:  # If this is an aisle (not the first row)
+                aisle_directions.append((row - main_road_width, current_direction))
+                # Toggle direction for next aisle
+                current_direction = 2 if current_direction == 0 else 0
+                aisle_count += 1
+                
+            row += shelf_block_height + main_road_width
+        
+        # Mark main road directions
+        # Vertical main roads (alternating directions)
+        for col in range(start_col + shelf_block_width + intersection_buffer, width, shelf_block_width + main_road_width):
+            if col + main_road_width <= width:
+                # Mark vertical main road sections
+                layout[start_row:, col:col + main_road_width] = -4  # Vertical main road
+        
+        # Horizontal main roads
+        for row in range(start_row + shelf_block_height, height, shelf_block_height + main_road_width):
+            if row + main_road_width <= height:
+                # Mark horizontal main road sections
+                layout[row:row + main_road_width, start_col:] = -5  # Horizontal main road
+        
+        # Mark intersection zones
+        for row in range(start_row + shelf_block_height, height, shelf_block_height + main_road_width):
+            for col in range(start_col + shelf_block_width, width, shelf_block_width + main_road_width):
+                if row + main_road_width <= height and col + main_road_width <= width:
+                    layout[row:row + main_road_width, col:col + main_road_width] = -6  # Intersection
+        
+        return layout
 
 def run_single_simulation(params):
     """Run a single simulation with given parameters"""
@@ -86,7 +163,7 @@ def run_single_simulation(params):
         'completion_rate': manager.completed_jobs / total_orders if total_orders > 0 else 0
     }, layout_viz
 
-def generate_additional_data(save_path: str = 'warehouse_data_files'):
+def generate_additional_data(save_path: str = 'warehouse_data_files', layout_type: str = "main_road"):
     """Generate additional training data for 50x85 warehouse focusing on 30-150 robots"""
     
     # Configuration
@@ -98,7 +175,7 @@ def generate_additional_data(save_path: str = 'warehouse_data_files'):
     max_steps = 20000
     
     # Generate warehouse layout
-    warehouse = generate_warehouse_layout(width, height)
+    warehouse = generate_warehouse_layout(width, height, layout_type)
     shelf_count = np.sum(warehouse == 1)
     
     # Calculate order density for target orders
@@ -131,7 +208,7 @@ def generate_additional_data(save_path: str = 'warehouse_data_files'):
         for result, layout in tqdm(
             pool.imap_unordered(run_single_simulation, simulation_params),
             total=len(simulation_params),
-            desc="Generating additional data"
+            desc=f"Generating data for {layout_type} layout"
         ):
             all_results.append(result)
             all_layouts.append(layout)
@@ -144,24 +221,17 @@ def generate_additional_data(save_path: str = 'warehouse_data_files'):
     results_df['shelf_count'] = shelf_count
     results_df['sample_id'] = range(len(results_df))
     results_df['sample_id'] = results_df['sample_id'].astype(int)
+    results_df['layout_type'] = layout_type
     
     # Save results
-    csv_path = os.path.join(save_path, 'training_data.csv')
-    if os.path.exists(csv_path):
-        # If file exists, append with new sample IDs
-        existing_data = pd.read_csv(csv_path)
-        max_sample_id = existing_data['sample_id'].max() if 'sample_id' in existing_data.columns else -1
-        results_df['sample_id'] += int(max_sample_id + 1)
-        results_df.to_csv(csv_path, mode='a', header=False, index=False)
-    else:
-        # If file doesn't exist, create new
-        os.makedirs(save_path, exist_ok=True)
-        os.makedirs(os.path.join(save_path, 'layouts'), exist_ok=True)
-        results_df.to_csv(csv_path, index=False)
+    csv_path = os.path.join(save_path, f'training_data_{layout_type}.csv')
+    os.makedirs(save_path, exist_ok=True)
+    os.makedirs(os.path.join(save_path, 'layouts'), exist_ok=True)
+    results_df.to_csv(csv_path, index=False)
     
     # Save layout visualizations
     for i, layout in enumerate(all_layouts):
-        layout_filename = f'layout_{int(results_df.iloc[i]["sample_id"]):04d}.npy'
+        layout_filename = f'layout_{layout_type}_{int(results_df.iloc[i]["sample_id"]):04d}.npy'
         np.save(os.path.join(save_path, 'layouts', layout_filename), layout)
     
     return results_df
@@ -170,23 +240,42 @@ if __name__ == "__main__":
     # Set random seed for reproducibility
     np.random.seed(42)
     
-    # Generate additional data
-    print("Generating additional training data for 50x85 warehouse...")
+    # Generate data for both layouts
+    print("Generating training data for 50x85 warehouse...")
     print("Focus: 30-150 robots, 2 workstations, 1000 orders")
-    new_data = generate_additional_data()
+    
+    # Generate data for main road layout
+    print("\nGenerating data for main road layout...")
+    main_road_data = generate_additional_data(layout_type="main_road")
+    
+    # Generate data for original layout
+    print("\nGenerating data for original layout...")
+    original_data = generate_additional_data(layout_type="original")
     
     # Print summary of new data
-    print("\nNew data generated:")
-    print(f"Number of new samples: {len(new_data)}")
+    print("\nData generated:")
+    print(f"Main road layout samples: {len(main_road_data)}")
+    print(f"Original layout samples: {len(original_data)}")
+    
+    print("\nData saved to:")
+    print("- warehouse_data_files/training_data_main_road.csv")
+    print("- warehouse_data_files/training_data_original.csv")
     
     # Calculate average metrics per robot count
-    metrics_by_robots = new_data.groupby('num_robots').agg({
+    metrics_by_robots = main_road_data.groupby('num_robots').agg({
         'completion_time': ['mean', 'std'],
         'orders_per_step': ['mean', 'std'],
         'robot_efficiency': ['mean', 'std']
     }).round(2)
     
-    print("\nPerformance metrics by robot count:")
+    print("\nPerformance metrics by robot count for main road layout:")
     print(metrics_by_robots)
     
-    print("\nData saved to warehouse_data_files/training_data.csv") 
+    metrics_by_robots = original_data.groupby('num_robots').agg({
+        'completion_time': ['mean', 'std'],
+        'orders_per_step': ['mean', 'std'],
+        'robot_efficiency': ['mean', 'std']
+    }).round(2)
+    
+    print("\nPerformance metrics by robot count for original layout:")
+    print(metrics_by_robots) 
