@@ -48,7 +48,6 @@ class Robot:
                 
             # Check if any other robot is at the position in front
             if (other_robot.x, other_robot.y) == front_pos:
-                print(f"Robot at ({self.x}, {self.y}) detected robot in front at {front_pos}")
                 return True
                 
         return False
@@ -56,29 +55,24 @@ class Robot:
     def update_position(self, warehouse: np.ndarray, all_robots: List['Robot'] = None, reservation_table: Dict[Tuple[int, int, int], int] = None) -> bool:
         """Update robot position based on current path and turning requirements"""
         if self.waiting_time > 0:
-            print(f"Robot at ({self.x}, {self.y}) waiting: {self.waiting_time} steps left")
             self.waiting_time -= 1
             return False
 
         if not self.path:
-            print(f"Robot at ({self.x}, {self.y}) has no path")
             return False
 
         # Remove any points in path that match current position
         while self.path and self.path[0] == (self.x, self.y):
             self.path.pop(0)
-            print(f"Skipping current position in path")
             
         if not self.path:
             return False
 
         if self.turning_steps > 0:
-            print(f"Robot at ({self.x}, {self.y}) turning: {self.turning_steps} steps left")
             self.turning_steps -= 1
             return False
 
         next_x, next_y = self.path[0]
-        print(f"Robot at ({self.x}, {self.y}) moving to ({next_x}, {next_y})")
         
         # Calculate required rotation
         dx = next_x - self.x
@@ -96,7 +90,6 @@ class Robot:
             target_rotation = 270  # Moving up
 
         if target_rotation is None:
-            print(f"Error: Invalid movement direction dx={dx}, dy={dy}")
             # Clear invalid path point
             if self.path:
                 self.path.pop(0)
@@ -109,7 +102,6 @@ class Robot:
             if diff > 180:
                 diff -= 360
             self.turning_steps = abs(diff) // 90 * 5
-            print(f"Robot at ({self.x}, {self.y}) starting turn from {self.rotation}° to {target_rotation}°")
             self.rotation = target_rotation
             return False
 
@@ -118,24 +110,19 @@ class Robot:
             if self.collision_method == 1:  # Waiting method
                 if self.is_robot_in_front(all_robots):
                     if self.collision_wait_counter < 10:
-                        print(f"Robot at ({self.x}, {self.y}) waiting for collision: {self.collision_wait_counter}/10 time units")
                         self.collision_wait_counter += 1
                         self.waiting_time = 1
                         return False
                     else:
-                        print(f"Robot at ({self.x}, {self.y}) waited 10 time units, proceeding through collision")
                         self.collision_wait_counter = 0  # Reset counter for next collision
             elif self.collision_method == 2:  # Reservation method
                 # Check if next position is safe according to reservation table
                 if not is_cell_safe(next_x, next_y, len(self.path), reservation_table, id(self)):
-                    print(f"Robot at ({self.x}, {self.y}) detected reservation conflict, waiting")
                     self.waiting_time = 1
                     return False
 
         # Move to next position if no turning needed
-        old_x, old_y = self.x, self.y
         self.x, self.y = self.path.pop(0)
-        print(f"Robot moved from ({old_x}, {old_y}) to ({self.x}, {self.y})")
         return True
 
 def is_directional_aisle(warehouse: np.ndarray, pos: Tuple[int, int]) -> Optional[Tuple[bool, int]]:
@@ -222,14 +209,7 @@ def is_directional_aisle(warehouse: np.ndarray, pos: Tuple[int, int]) -> Optiona
 
 def find_shortest_path(warehouse: np.ndarray, start: Tuple[int, int], 
                       end: Tuple[int, int], workstations: List[Tuple[int, int]] = None) -> List[Tuple[int, int]]:
-    """A* pathfinding algorithm for robot routing with directional aisle constraints
-    
-    Args:
-        warehouse: The warehouse grid
-        start: The starting position (x, y)
-        end: The target position (x, y)
-        workstations: List of workstation positions to avoid unless they are the destination
-    """
+    """A* pathfinding algorithm for robot routing with directional aisle constraints"""
     if start == end:
         return []
         
@@ -325,7 +305,6 @@ def find_shortest_path(warehouse: np.ndarray, start: Tuple[int, int],
                 came_from[next_pos] = current
     
     if end not in came_from:
-        print(f"No path found from {start} to {end}")
         return []
         
     # Reconstruct path
@@ -344,8 +323,7 @@ def find_shortest_path(warehouse: np.ndarray, start: Tuple[int, int],
                 filtered_path.append(path[i])
         path = filtered_path
     
-    print(f"Found path from {start} to {end}: {path}")
-    return path 
+    return path
 
 def build_reservation_table(robots: List[Robot]) -> Dict[Tuple[int, int, int], int]:
     """Build a reservation table for time-expanded A* pathfinding

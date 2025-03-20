@@ -97,8 +97,13 @@ class WarehouseVisualizer:
         pygame.display.set_caption("Warehouse Simulation")
         
         # Initialize warehouse manager with specified collision method
-        self.warehouse_manager = WarehouseManager(warehouse, collision_method=collision_method)
         self.robot_count = max(1, int(np.sqrt(np.sum(warehouse == 1))))
+        self.workstation_count = 2  # Initial number of workstations
+        self.warehouse_manager = WarehouseManager(
+            warehouse, 
+            num_workstations=self.workstation_count,
+            collision_method=collision_method
+        )
         self.warehouse_manager.initialize_robots(self.robot_count)
         
         # Colors
@@ -138,8 +143,14 @@ class WarehouseVisualizer:
             self.screen_width - self.button_width - self.margin, 3 * self.margin + 2 * self.button_height,
             self.button_width, self.button_height
         )
-        self.slider_rect = pygame.Rect(
+        # Robot count slider
+        self.robot_slider_rect = pygame.Rect(
             self.screen_width - self.button_width - self.margin, 4 * self.margin + 3 * self.button_height,
+            self.slider_width, self.slider_height
+        )
+        # Workstation count slider
+        self.workstation_slider_rect = pygame.Rect(
+            self.screen_width - self.button_width - self.margin, 5 * self.margin + 3 * self.button_height + self.slider_height,
             self.slider_width, self.slider_height
         )
     
@@ -243,45 +254,63 @@ class WarehouseVisualizer:
             pygame.draw.rect(self.screen, self.WHITE, button_rect)
             pygame.draw.rect(self.screen, self.BLACK, button_rect, 2)
         
-        # Draw slider
-        pygame.draw.rect(self.screen, self.WHITE, self.slider_rect)
-        pygame.draw.rect(self.screen, self.BLACK, self.slider_rect, 2)
+        # Draw robot slider
+        pygame.draw.rect(self.screen, self.WHITE, self.robot_slider_rect)
+        pygame.draw.rect(self.screen, self.BLACK, self.robot_slider_rect, 2)
         
-        # Draw slider position
-        max_robots = max(1, int(np.sqrt(np.sum(self.warehouse == 1))))
-        slider_pos = int(self.slider_rect.x + 
-                        (self.robot_count / max_robots) * self.slider_width)
-        pygame.draw.circle(self.screen, self.BLACK, 
-                         (slider_pos, self.slider_rect.centery), 8)
+        # Draw robot slider position
+        robot_slider_pos = int(self.robot_slider_rect.x + 
+                             (self.robot_count / max(1, count_shelves(self.warehouse))) * 
+                             self.slider_width)
+        pygame.draw.rect(self.screen, self.BLUE,
+                        (robot_slider_pos - 5, self.robot_slider_rect.y,
+                         10, self.robot_slider_rect.height))
         
-        # Draw texts
-        order_text = self.font.render("Order Generation", True, self.BLACK)
-        play_text = self.font.render("Play/Pause", True, self.BLACK)
-        evaluate_text = self.font.render(
-            f"Jobs: {self.warehouse_manager.completed_jobs}", True, self.BLACK
-        )
-        robot_text = self.font.render(f"Robots: {self.robot_count}", True, self.BLACK)
-        time_text = self.font.render(
-            f"Time: {self.warehouse_manager.time_step}s", True, self.BLACK
-        )
-        zoom_text = self.font.render(f"Zoom: {self.zoom_level:.1f}x", True, self.BLACK)
-        collision_text = self.font.render(
-            "Collision: Wait" if self.collision_method == 1 else "Collision: Reserve",
+        # Draw workstation slider
+        pygame.draw.rect(self.screen, self.WHITE, self.workstation_slider_rect)
+        pygame.draw.rect(self.screen, self.BLACK, self.workstation_slider_rect, 2)
+        
+        # Draw workstation slider position (max 10 workstations)
+        workstation_slider_pos = int(self.workstation_slider_rect.x + 
+                                   (self.workstation_count / 10) * 
+                                   self.slider_width)
+        pygame.draw.rect(self.screen, self.GREEN,
+                        (workstation_slider_pos - 5, self.workstation_slider_rect.y,
+                         10, self.workstation_slider_rect.height))
+        
+        # Draw text
+        order_text = self.font.render("Generate Orders", True, self.BLACK)
+        play_text = self.font.render(
+            "Pause" if self.warehouse_manager.is_playing else "Play", 
             True, self.BLACK
         )
+        evaluate_text = self.font.render("Evaluate", True, self.BLACK)
+        collision_text = self.font.render(
+            f"Collision: {'Reservation' if self.collision_method == 2 else 'Waiting'}", 
+            True, self.BLACK
+        )
+        robot_text = self.font.render(f"Robots: {self.robot_count}", True, self.BLACK)
+        workstation_text = self.font.render(f"Workstations: {self.workstation_count}", True, self.BLACK)
         
-        # Position texts
-        self.screen.blit(order_text, order_text.get_rect(
-            center=self.order_button_rect.center))
-        self.screen.blit(play_text, play_text.get_rect(
-            center=self.play_button_rect.center))
-        self.screen.blit(evaluate_text, evaluate_text.get_rect(
-            center=self.evaluate_button_rect.center))
-        self.screen.blit(robot_text, (self.slider_rect.x, self.slider_rect.y - 25))
-        self.screen.blit(time_text, (self.margin, self.margin))
-        self.screen.blit(zoom_text, (self.margin, self.margin + 30))
-        self.screen.blit(collision_text, collision_text.get_rect(
-            center=self.collision_button_rect.center))
+        # Position text
+        self.screen.blit(order_text, 
+                        (self.order_button_rect.centerx - order_text.get_width()//2,
+                         self.order_button_rect.centery - order_text.get_height()//2))
+        self.screen.blit(play_text,
+                        (self.play_button_rect.centerx - play_text.get_width()//2,
+                         self.play_button_rect.centery - play_text.get_height()//2))
+        self.screen.blit(evaluate_text,
+                        (self.evaluate_button_rect.centerx - evaluate_text.get_width()//2,
+                         self.evaluate_button_rect.centery - evaluate_text.get_height()//2))
+        self.screen.blit(collision_text,
+                        (self.collision_button_rect.centerx - collision_text.get_width()//2,
+                         self.collision_button_rect.centery - collision_text.get_height()//2))
+        self.screen.blit(robot_text,
+                        (self.robot_slider_rect.x,
+                         self.robot_slider_rect.y - 25))
+        self.screen.blit(workstation_text,
+                        (self.workstation_slider_rect.x,
+                         self.workstation_slider_rect.y - 25))
     
     def toggle_collision_method(self):
         """Toggle between collision methods and reinitialize robots"""
@@ -293,36 +322,48 @@ class WarehouseVisualizer:
     def handle_input(self, event):
         """Handle input events"""
         if event.type == pygame.MOUSEBUTTONDOWN:
-            if event.button in (4, 5):  # Mouse wheel
-                # Calculate zoom center (mouse position)
-                mouse_x, mouse_y = pygame.mouse.get_pos()
-                if mouse_x < self.screen_width - self.button_width - 2 * self.margin:
-                    old_zoom = self.zoom_level
-                    if event.button == 4:  # Zoom in
-                        self.zoom_level = min(self.zoom_level * 1.1, self.max_zoom)
-                    else:  # Zoom out
-                        self.zoom_level = max(self.zoom_level / 1.1, self.min_zoom)
-                    
-                    # Adjust pan to keep mouse position fixed
-                    zoom_factor = self.zoom_level / old_zoom
-                    self.pan_x = mouse_x - (mouse_x - self.pan_x) * zoom_factor
-                    self.pan_y = mouse_y - (mouse_y - self.pan_y) * zoom_factor
-            
-            elif event.button == 1:  # Left click
+            if event.button == 1:  # Left click
                 mouse_pos = pygame.mouse.get_pos()
                 
-                # Handle UI element clicks
+                # Check button clicks
                 if self.order_button_rect.collidepoint(mouse_pos):
-                    orders = uniform_order_distribution(0.3, self.warehouse)
-                    self.warehouse_manager.update_orders(orders)
+                    self.warehouse_manager.update_orders(
+                        uniform_order_distribution(0.3, self.warehouse)
+                    )
                 elif self.play_button_rect.collidepoint(mouse_pos):
                     self.warehouse_manager.toggle_play()
+                elif self.evaluate_button_rect.collidepoint(mouse_pos):
+                    print("Evaluation button clicked")
                 elif self.collision_button_rect.collidepoint(mouse_pos):
                     self.toggle_collision_method()
-                elif self.slider_rect.collidepoint(mouse_pos):
-                    self.dragging = True
+                
+                # Check slider clicks
+                elif self.robot_slider_rect.collidepoint(mouse_pos):
+                    x_pos = mouse_pos[0] - self.robot_slider_rect.x
+                    ratio = x_pos / self.slider_width
+                    new_robot_count = max(1, min(int(ratio * count_shelves(self.warehouse)),
+                                               count_shelves(self.warehouse)))
+                    if new_robot_count != self.robot_count:
+                        self.robot_count = new_robot_count
+                        self.warehouse_manager.initialize_robots(self.robot_count)
+                
+                # Check workstation slider clicks
+                elif self.workstation_slider_rect.collidepoint(mouse_pos):
+                    x_pos = mouse_pos[0] - self.workstation_slider_rect.x
+                    ratio = x_pos / self.slider_width
+                    new_workstation_count = max(1, min(int(ratio * 10), 10))  # Max 10 workstations
+                    if new_workstation_count != self.workstation_count:
+                        self.workstation_count = new_workstation_count
+                        # Reinitialize warehouse manager with new workstation count
+                        self.warehouse_manager = WarehouseManager(
+                            self.warehouse,
+                            num_workstations=self.workstation_count,
+                            collision_method=self.collision_method
+                        )
+                        self.warehouse_manager.initialize_robots(self.robot_count)
+                
+                # Start dragging for pan
                 else:
-                    # Start panning
                     self.dragging = True
                     self.last_mouse_pos = mouse_pos
         
@@ -332,14 +373,25 @@ class WarehouseVisualizer:
         
         elif event.type == pygame.MOUSEMOTION and self.dragging:
             mouse_pos = pygame.mouse.get_pos()
-            if self.slider_rect.collidepoint(mouse_pos):
+            if self.robot_slider_rect.collidepoint(mouse_pos):
                 # Update robot count
                 max_robots = max(1, int(np.sqrt(np.sum(self.warehouse == 1))))
-                relative_x = min(max(mouse_pos[0] - self.slider_rect.x, 0), 
+                relative_x = min(max(mouse_pos[0] - self.robot_slider_rect.x, 0), 
                                self.slider_width)
                 new_robot_count = max(1, int((relative_x / self.slider_width) * max_robots))
                 if new_robot_count != self.robot_count:
                     self.robot_count = new_robot_count
+                    self.warehouse_manager.initialize_robots(self.robot_count)
+            elif self.workstation_slider_rect.collidepoint(mouse_pos):
+                # Update workstation count
+                new_workstation_count = max(1, min(int(mouse_pos[0] / self.slider_width * 10), 10))
+                if new_workstation_count != self.workstation_count:
+                    self.workstation_count = new_workstation_count
+                    self.warehouse_manager = WarehouseManager(
+                        self.warehouse,
+                        num_workstations=self.workstation_count,
+                        collision_method=self.collision_method
+                    )
                     self.warehouse_manager.initialize_robots(self.robot_count)
             elif self.last_mouse_pos:
                 # Pan the view
@@ -379,8 +431,8 @@ class WarehouseVisualizer:
             self.draw_ui()
             pygame.display.flip()
             clock.tick(60)
-        
-        pygame.quit()
+    
+    pygame.quit()
 
 def main():
     # Load warehouse data

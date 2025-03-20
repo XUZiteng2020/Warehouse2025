@@ -10,12 +10,14 @@ from robot import (
     is_cell_safe
 )
 import random
+from workstation import generate_workstation_positions
 
 class WarehouseManager:
-    def __init__(self, warehouse: np.ndarray, collision_method: int = 1):
+    def __init__(self, warehouse: np.ndarray, num_workstations: int = 2, collision_method: int = 1):
         self.warehouse = warehouse
         self.rows, self.cols = warehouse.shape
         self.robots: List[Robot] = []
+        self.num_workstations = num_workstations
         self.workstations = self._initialize_workstations()
         self.orders = np.zeros_like(warehouse)
         self.time_step = 0
@@ -26,12 +28,11 @@ class WarehouseManager:
         self.reservation_table = None  # Initialize as None by default
 
     def _initialize_workstations(self) -> List[Tuple[int, int]]:
-        """Initialize workstations at the leftmost end of each aisle"""
-        workstations = []
-        for i in range(self.rows):
-            if self.warehouse[i, 0] == 0:  # If it's an aisle
-                workstations.append((i, 0))
-        return workstations
+        """Initialize workstations using random placement on the left edge"""
+        return generate_workstation_positions(
+            num_workstations=self.num_workstations,
+            warehouse_height=self.rows
+        )
 
     def initialize_robots(self, n: int):
         """Initialize n robots at random valid positions"""
@@ -67,7 +68,6 @@ class WarehouseManager:
         
         chosen_location = random.choice(order_locations)
         self.targeted_orders.add(chosen_location)
-        print(f"Assigning order at {chosen_location} to robot")
         return chosen_location
 
     def get_random_workstation(self) -> Tuple[int, int]:
@@ -112,7 +112,6 @@ class WarehouseManager:
                     
                     if path:
                         robot.target_x, robot.target_y = order_location
-                        print(f"Robot at ({robot.x}, {robot.y}) assigned to order at {order_location}")
 
             # Update robot position
             moved = robot.update_position(self.warehouse, self.robots, self.reservation_table)
@@ -122,7 +121,6 @@ class WarehouseManager:
             if robot.target_x is not None and robot.x == robot.target_x and robot.y == robot.target_y:
                 if robot.status == RobotStatus.IDLE:
                     # Reached order location
-                    print(f"Robot reached order at ({robot.x}, {robot.y})")
                     self.orders[robot.x, robot.y] = 0
                     self.targeted_orders.discard((robot.x, robot.y))
                     robot.status = RobotStatus.WORKING
@@ -154,11 +152,9 @@ class WarehouseManager:
                     
                     if path:
                         robot.target_x, robot.target_y = workstation
-                        print(f"Robot assigned to workstation at {workstation}")
                 
                 elif robot.status == RobotStatus.WORKING and (robot.x, robot.y) in self.workstations:
                     # Reached workstation
-                    print(f"Robot completed job at workstation ({robot.x}, {robot.y})")
                     robot.waiting_time = 3
                     robot.status = RobotStatus.IDLE
                     robot.target_x = robot.target_y = None
@@ -173,5 +169,4 @@ class WarehouseManager:
 
     def toggle_play(self):
         """Toggle between play and pause states"""
-        self.is_playing = not self.is_playing
-        print(f"Simulation {'started' if self.is_playing else 'paused'}") 
+        self.is_playing = not self.is_playing 
