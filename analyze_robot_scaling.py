@@ -82,7 +82,7 @@ def analyze_completion_time_vs_robots(data_main_road: pd.DataFrame, data_origina
         p = np.poly1d(z)
         x_smooth = np.linspace(data['num_robots'].min(), data['num_robots'].max(), 100)
         return ax1.plot(x_smooth, p(x_smooth), f'{color}--', alpha=alpha, 
-                       label=f'{"Main Road" if color=="r" else "Original"} Trend')
+                       label=f"{'Main Road' if color=='r' else 'Original'} Trend")
     
     add_trend_line(grouped_main_road, 'r')
     add_trend_line(grouped_original, 'b')

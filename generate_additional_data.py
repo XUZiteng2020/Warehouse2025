@@ -7,6 +7,9 @@ from warehouse_manager import WarehouseManager
 from order_generation import uniform_order_distribution
 from multiprocessing import Pool, cpu_count
 import itertools
+from warehouse_simulator import WarehouseSimulator
+from warehouse_generator import generate_original_layout, generate_two_main_roads_layout
+import multiprocessing as mp
 
 def generate_original_layout(width: int, height: int) -> np.ndarray:
     """
@@ -236,6 +239,93 @@ def generate_additional_data(save_path: str = 'warehouse_data_files', layout_typ
     
     return results_df
 
+def run_simulation(config):
+    """Run a single simulation with given configuration"""
+    layout_type, num_robots, num_workstations, num_orders = config
+    
+    # Generate layout based on type
+    if layout_type == "original":
+        layout = generate_original_layout(50, 85)
+    else:  # two_main_roads
+        layout = generate_two_main_roads_layout(50, 85)
+    
+    simulator = WarehouseSimulator(
+        layout=layout,
+        num_robots=num_robots,
+        num_workstations=num_workstations,
+        target_orders=num_orders
+    )
+    
+    # Run simulation and get metrics
+    completion_time, orders_per_step = simulator.run()
+    robot_efficiency = orders_per_step / num_robots if num_robots > 0 else 0
+    
+    return {
+        'layout_type': layout_type,
+        'num_robots': num_robots,
+        'num_workstations': num_workstations,
+        'num_orders': num_orders,
+        'completion_time': completion_time,
+        'orders_per_step': orders_per_step,
+        'robot_efficiency': robot_efficiency
+    }
+
+def main():
+    """Generate simulation data for both layouts"""
+    print("Generating additional training data for warehouse size 50x85...")
+    
+    # Configuration parameters
+    robot_counts = list(range(30, 155, 5))  # 30 to 150 robots in steps of 5
+    workstation_counts = [2]  # Fixed at 2 workstations
+    order_counts = [1000]  # Fixed at 1000 orders
+    layout_types = ["original", "two_main_roads"]
+    samples_per_config = 5  # Multiple samples per configuration for statistical significance
+    
+    # Generate all configurations to test
+    configs = []
+    for layout_type in layout_types:
+        for num_robots in robot_counts:
+            for num_workstations in workstation_counts:
+                for num_orders in order_counts:
+                    for _ in range(samples_per_config):
+                        configs.append((layout_type, num_robots, num_workstations, num_orders))
+    
+    print(f"Testing {len(configs)} configurations...")
+    
+    # Run simulations using multiple processes
+    num_processes = max(1, mp.cpu_count() - 1)
+    print(f"Running simulations using {num_processes} processes...")
+    
+    with mp.Pool(num_processes) as pool:
+        results = []
+        completed = 0
+        
+        # Run simulations and track progress
+        for result in pool.imap_unordered(run_simulation, configs):
+            results.append(result)
+            completed += 1
+            if completed % 10 == 0:
+                print(f"Progress: {completed}/{len(configs)} ({completed/len(configs)*100:.0f}%)")
+    
+    # Convert results to DataFrame
+    df = pd.DataFrame(results)
+    
+    # Save results
+    df.to_csv('warehouse_data_files/training_data.csv', index=False)
+    print(f"\nGenerated {len(df)} new samples")
+    
+    # Print summary statistics by layout type and robot count
+    for layout_type in layout_types:
+        print(f"\nPerformance metrics for {layout_type} layout:")
+        layout_data = df[df['layout_type'] == layout_type]
+        for num_robots in robot_counts:
+            robot_data = layout_data[layout_data['num_robots'] == num_robots]
+            if len(robot_data) > 0:
+                print(f"\nRobots: {num_robots}")
+                print(f"Completion Time: {robot_data['completion_time'].mean():.1f} ± {robot_data['completion_time'].std():.1f}")
+                print(f"Orders/Step: {robot_data['orders_per_step'].mean():.3f} ± {robot_data['orders_per_step'].std():.3f}")
+                print(f"Robot Efficiency: {robot_data['robot_efficiency'].mean():.3f} ± {robot_data['robot_efficiency'].std():.3f}")
+
 if __name__ == "__main__":
     # Set random seed for reproducibility
     np.random.seed(42)
@@ -278,4 +368,6 @@ if __name__ == "__main__":
     }).round(2)
     
     print("\nPerformance metrics by robot count for original layout:")
-    print(metrics_by_robots) 
+    print(metrics_by_robots)
+    
+    main() 
