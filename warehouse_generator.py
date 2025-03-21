@@ -27,7 +27,7 @@ def generate_warehouse(rows, cols):
     return warehouse
 
 # Generate a larger warehouse (e.g., 12 rows by 20 columns)
-rows, cols = 120,200
+rows, cols = 30,50
 warehouse_data = generate_warehouse(rows, cols)
 
 # Add two rows of aisles on top by prepending rows of zeros
